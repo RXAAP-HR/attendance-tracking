@@ -521,7 +521,7 @@ p, label { color: var(--muted) !important; }
 }
 .dashboard-hero-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: .6rem;
 }
 .dashboard-hero-stat {
@@ -2085,8 +2085,8 @@ def selected_employee_sidebar(conn, employee_id: int | None) -> None:
         return
     full_name = f"{emp.get('first_name') or ''} {emp.get('last_name') or ''}".strip() or "Unknown Employee"
     full_name_html = _html_inline(full_name)
-    emp_id_html = _html_inline(emp.get("employee_id") or "�")
-    building_html = _html_inline(emp.get("building") or "�")
+    emp_id_html = _html_inline(emp.get("employee_id") or "—")
+    building_html = _html_inline(emp.get("building") or "—")
     last_point_html = _html_inline(fmt_date(emp.get("last_positive_point_date")))
     roll_off_html = _html_inline(fmt_date(emp.get("rolloff_date")))
     perfect_attendance_html = _html_inline(fmt_date(emp.get("perfect_attendance")))
@@ -2296,7 +2296,8 @@ def dashboard_page(conn, building: str) -> None:
         '''
         sql_build_points_window = f'''
             SELECT COALESCE(e."Location", '') AS building,
-                   ROUND(COALESCE(SUM(ph.points), 0.0)::numeric, 1)::float8 AS pts
+                   ROUND(COALESCE(SUM(ph.points), 0.0)::numeric, 1)::float8 AS pts,
+                   COUNT(*) AS incident_count
               FROM points_history ph
               JOIN employees e ON e.employee_id = ph.employee_id
              WHERE ph.employee_id IN ({ph})
@@ -2323,7 +2324,7 @@ def dashboard_page(conn, building: str) -> None:
                         GROUP BY ph2.reason
                         ORDER BY COUNT(*) DESC, MAX(ph2.point_date::date) DESC, ph2.reason
                         LIMIT 1
-                   ), '�') AS top_reason
+                   ), '-') AS top_reason
               FROM employees e
               JOIN points_history ph ON ph.employee_id = e.employee_id
              WHERE e.employee_id IN ({ph})
@@ -2473,7 +2474,8 @@ def dashboard_page(conn, building: str) -> None:
         '''
         sql_build_points_window = f'''
             SELECT COALESCE(e."Location", '') AS building,
-                   ROUND(COALESCE(SUM(ph.points), 0.0), 1) AS pts
+                   ROUND(COALESCE(SUM(ph.points), 0.0), 1) AS pts,
+                   COUNT(*) AS incident_count
               FROM points_history ph
               JOIN employees e ON e.employee_id = ph.employee_id
              WHERE ph.employee_id IN ({ph})
@@ -2500,7 +2502,7 @@ def dashboard_page(conn, building: str) -> None:
                         GROUP BY ph2.reason
                         ORDER BY COUNT(*) DESC, MAX(date(ph2.point_date)) DESC, ph2.reason
                         LIMIT 1
-                   ), '�') AS top_reason
+                   ), '-') AS top_reason
               FROM employees e
               JOIN points_history ph ON ph.employee_id = e.employee_id
              WHERE e.employee_id IN ({ph})
@@ -2616,8 +2618,10 @@ def dashboard_page(conn, building: str) -> None:
     _dash_status.empty()
 
     # ── Now that we have real data, fill the top-of-page widgets ─────────────
-    at_risk_5plus = bucket_counts.get("5-6", 0) + bucket_counts.get("7", 0)
-    total_active  = len(emp_detail_rows)
+    warning_zone     = bucket_counts.get("5-6", 0)
+    termination_zone = bucket_counts.get("7", 0)
+    at_risk_5plus    = warning_zone + termination_zone
+    total_active     = len(emp_detail_rows)
 
     render_tech_hud(
         building,
@@ -2639,7 +2643,8 @@ def dashboard_page(conn, building: str) -> None:
         f"""<div class='dashboard-hero'>
                 <div class='dashboard-hero-grid'>
                     <div class='dashboard-hero-stat'><div class='k'>Active Employees</div><div class='v'>{total_active}</div></div>
-                    <div class='dashboard-hero-stat'><div class='k'>At Risk (5+)</div><div class='v'>{at_risk_5plus}</div></div>
+                    <div class='dashboard-hero-stat'><div class='k'>Warning (5.0\u20136.5)</div><div class='v'>{warning_zone}</div></div>
+                    <div class='dashboard-hero-stat' style='border-color:rgba(255,48,79,.35)'><div class='k' style='color:#ff6a7f'>Termination Zone (7+)</div><div class='v' style='color:#ff6a7f'>{termination_zone}</div></div>
                     <div class='dashboard-hero-stat'><div class='k'>Rolloffs Due 7d</div><div class='v'>{rolloffs_due_7d}</div></div>
                     <div class='dashboard-hero-stat'><div class='k'>Perfect Due 7d</div><div class='v'>{perfect_due_7d}</div></div>
                 </div>
@@ -2750,7 +2755,7 @@ def dashboard_page(conn, building: str) -> None:
                         "employee_id": int(r["employee_id"]),
                         "Employee #": str(r["employee_id"]),
                         "Name": f"{r['last_name']}, {r['first_name']}",
-                        "Building": r.get("building") or "�",
+                        "Building": r.get("building") or "—",
                         "Point Total": f"{float(r.get('point_total') or 0):.1f}",
                         "Last Point Date": fmt_date(r.get("last_point_date")),
                     }
@@ -2784,7 +2789,7 @@ def dashboard_page(conn, building: str) -> None:
                     {
                         "Employee #": str(r["employee_id"]),
                         "Name": f"{r['last_name']}, {r['first_name']}",
-                        "Building": r.get("building") or "�",
+                        "Building": r.get("building") or "—",
                         "Rolloff Date": fmt_date(r.get("rolloff_date")),
                         "Current Points": f"{float(r.get('point_total') or 0):.1f}",
                     }
@@ -2792,6 +2797,9 @@ def dashboard_page(conn, building: str) -> None:
                 ]
             )
             st.dataframe(df_roll, use_container_width=True, hide_index=True, height=235)
+            critical_rolloffs = sum(1 for r in roll_due_rows if float(r.get("point_total") or 0) >= 7.0)
+            if critical_rolloffs:
+                st.caption(f"{critical_rolloffs} of these involve employees in the 7.0+ range \u2014 rolloff will materially reduce their risk.")
         else:
             info_box("No roll-offs due in the next 30 days.")
 
@@ -2803,7 +2811,7 @@ def dashboard_page(conn, building: str) -> None:
                     {
                         "Employee #": str(r["employee_id"]),
                         "Name": f"{r['last_name']}, {r['first_name']}",
-                        "Building": r.get("building") or "�",
+                        "Building": r.get("building") or "—",
                         "Perfect Date": fmt_date(r.get("perfect_attendance")),
                         "Current Points": f"{float(r.get('point_total') or 0):.1f}",
                     }
@@ -2840,8 +2848,9 @@ def dashboard_page(conn, building: str) -> None:
 
     current_rows = _read_rows(sql_build_points_window, (*emp_ids, since_30, tomorrow))
     prior_rows = _read_rows(sql_build_points_window, (*emp_ids, since_60, since_30))
-    current_points = {r.get("building") or "": float(r.get("pts") or 0.0) for r in current_rows}
-    prior_points = {r.get("building") or "": float(r.get("pts") or 0.0) for r in prior_rows}
+    current_points    = {r.get("building") or "": float(r.get("pts") or 0.0) for r in current_rows}
+    current_incidents = {r.get("building") or "": int(r.get("incident_count") or 0) for r in current_rows}
+    prior_points      = {r.get("building") or "": float(r.get("pts") or 0.0) for r in prior_rows}
 
     # ── Consolidated top reason per building (1 query instead of 3) ───────
     if is_pg(conn):
@@ -2903,22 +2912,16 @@ def dashboard_page(conn, building: str) -> None:
     for b in BUILDINGS:
         headcount = int(active_by_build.get(b) or 0)
         avg_point_total = float(avg_total_by_build.get(b) or 0.0)
-        cur_total = float(current_points.get(b) or 0.0)
-        prev_total = float(prior_points.get(b) or 0.0)
-        cur_avg_30d = (cur_total / headcount) if headcount else 0.0
-        prev_avg_30d = (prev_total / headcount) if headcount else 0.0
-        if prev_avg_30d > 0:
-            pct_change = ((cur_avg_30d - prev_avg_30d) / prev_avg_30d) * 100.0
-            pct_txt = f"{pct_change:+.1f}%"
-        else:
-            pct_txt = "\u2014"
+        cur_incidents = int(current_incidents.get(b) or 0)
+        rate_30d = round((cur_incidents / headcount) * 100, 1) if headcount else 0.0
+        rate_txt = f"{rate_30d:.1f}" if headcount else "\u2014"
         most_common_reason = reason_by_build.get(b) or "\u2014"
         snap_rows.append(
             {
                 "Building": b,
                 "Active Employees": headcount,
                 "Avg Point Total / Employee": f"{avg_point_total:.2f}",
-                "% Change in Avg Points (30d)": pct_txt,
+                "Incidents / 100 Employees (30d)": rate_txt,
                 "Most Common Reason (30d)": most_common_reason,
             }
         )
@@ -2930,16 +2933,18 @@ def dashboard_page(conn, building: str) -> None:
 
     st.markdown("#### Employees > 1.0 Point (Last 30 Days)")
     gt1_rows = _read_rows(sql_insights_gt1, (since_30, *emp_ids, since_30))
+    points30d_by_emp = {int(r.get("employee_id")): float(r.get("points_30d") or 0.0) for r in gt1_rows}
+    weekdays_30_past = max(len(pd.bdate_range(start=today - timedelta(days=30), end=today)), 1)
     if gt1_rows:
         df_gt1 = pd.DataFrame(
             [
                 {
                     "Employee #": str(r["employee_id"]),
                     "Name": f"{r['last_name']}, {r['first_name']}",
-                    "Building": r.get("building") or "�",
+                    "Building": r.get("building") or "—",
                     "Points (30d)": f"{float(r.get('points_30d') or 0.0):.1f}",
                     "Last Point Date": fmt_date(r.get("last_point_date")),
-                    "Top Reason": (r.get("top_reason") or "�"),
+                    "Top Reason": (r.get("top_reason") or "—"),
                 }
                 for r in gt1_rows
             ]
@@ -2951,7 +2956,7 @@ def dashboard_page(conn, building: str) -> None:
     else:
         info_box("No employees over 1.0 points in the last 30 days.")
 
-    st.markdown("#### Trending Risks  � On track to exceed 8 points")
+    st.markdown("#### Trending Risks — On track to exceed 8 points")
     pts60_rows = _read_rows(sql_points_60d, (*emp_ids, since_60))
     points60_by_emp = {int(r.get("employee_id")): float(r.get("points_60d") or 0.0) for r in pts60_rows}
     weekdays_60 = max(len(pd.bdate_range(start=today - timedelta(days=60), end=today)), 1)
@@ -2964,15 +2969,30 @@ def dashboard_page(conn, building: str) -> None:
         projected_30d = (points_60d / weekdays_60) * weekdays_30
         projected_total = current_points + projected_30d
         if projected_total >= 8.0:
+            points_30d_emp = float(points30d_by_emp.get(emp_id) or 0.0)
+            rate_30d_emp = points_30d_emp / weekdays_30_past
+            rate_60d_emp = points_60d / weekdays_60
+            if rate_60d_emp > 0:
+                if rate_30d_emp >= rate_60d_emp * 1.2:
+                    trend = "Rising"
+                elif rate_30d_emp <= rate_60d_emp * 0.8:
+                    trend = "Falling"
+                else:
+                    trend = "Stable"
+            elif rate_30d_emp > 0:
+                trend = "Rising"
+            else:
+                trend = "Stable"
             risk_rows.append(
                 {
                     "Employee #": str(emp_id),
                     "Name": f"{r['last_name']}, {r['first_name']}",
-                    "Building": r.get("building") or "�",
+                    "Building": r.get("building") or "\u2014",
                     "Current Points": f"{current_points:.1f}",
                     "Points (60d)": f"{points_60d:.1f}",
                     "Projected +30d": f"{projected_30d:.1f}",
                     "Projected Total": f"{projected_total:.1f}",
+                    "Trend": trend,
                     "Confidence Note": "Low data" if points_60d < 2.0 else "Based on last 60 days",
                     "_projected_total": projected_total,
                 }
@@ -3002,6 +3022,7 @@ def dashboard_page(conn, building: str) -> None:
         trend_df = trend_df.drop(columns=["Total Points_q"])
     trend_df["point_day"] = pd.to_datetime(trend_df["point_day"])
     trend_df = trend_df.rename(columns={"point_day": "Date"}).set_index("Date")
+    trend_df["7-Day Avg"] = trend_df["Total Points"].rolling(7, min_periods=1).mean().round(1)
     st.line_chart(trend_df)
 
     st.markdown("#### Day-of-Week Trend")
@@ -3053,7 +3074,7 @@ def dashboard_page(conn, building: str) -> None:
 
     denominator_count = max(len(emp_ids), 1)
     if metric_choice == "Rate":
-        st.caption("Rate uses approximate active-headcount denominator: incidents � active employees � 100.")
+        st.caption("Rate uses approximate active-headcount denominator: incidents / active employees x 100.")
 
     def metric_value(stats: dict, metric: str) -> float:
         incidents = float(stats.get("incidents") or 0)
@@ -3172,7 +3193,7 @@ def dashboard_page(conn, building: str) -> None:
             (*emp_ids, window_start.isoformat(), window_end.isoformat(), sel_dow),
         )
         if emp_rows:
-            st.markdown(f"**Employees pointed on {sel_label}s** ({window_start.strftime('%b %d')} � {window_end.strftime('%b %d, %Y')})")
+            st.markdown(f"**Employees pointed on {sel_label}s** ({window_start.strftime('%b %d')} – {window_end.strftime('%b %d, %Y')})")
             emp_display = pd.DataFrame([
                 {
                     "Employee": r["employee"],
@@ -3195,7 +3216,7 @@ def dashboard_page(conn, building: str) -> None:
         worst_value_txt = f"{worst_value:.1f} points"
     else:
         worst_value_txt = f"{worst_value:.2f} incidents per 100 active"
-    st.markdown(f"� Worst weekday ({metric_choice.lower()}): **{worst_label}** � **{worst_value_txt}**")
+    st.markdown(f"• Worst weekday ({metric_choice.lower()}): **{worst_label}** — **{worst_value_txt}**")
 
     delta_rows = []
     for dow in dow_order:
@@ -3212,15 +3233,15 @@ def dashboard_page(conn, building: str) -> None:
 
     if delta_rows:
         ch_dow, _, pct_txt = max(delta_rows, key=lambda x: x[1])
-        st.markdown(f"� Biggest change vs prior matching window: **{dow_labels[ch_dow]}** � **{pct_txt}**")
+        st.markdown(f"• Biggest change vs prior matching window: **{dow_labels[ch_dow]}** — **{pct_txt}**")
 
     reason_rows = _read_rows(
         sql_weekday_reason,
         (*emp_ids, window_start.isoformat(), window_end.isoformat(), worst_dow),
     )
-    top_reason = (reason_rows[0].get("reason") if reason_rows else None) or "�"
-    if top_reason != "�":
-        st.markdown(f"� Most common reason on {worst_label}: **{top_reason}**")
+    top_reason = (reason_rows[0].get("reason") if reason_rows else None) or "—"
+    if top_reason != "—":
+        st.markdown(f"• Most common reason on {worst_label}: **{top_reason}**")
 
 
 
