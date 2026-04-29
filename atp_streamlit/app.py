@@ -4907,13 +4907,13 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
     elif export_type == "upcoming 2-month roll-offs":
         if pg:
             sql = """SELECT employee_id, last_name, first_name, COALESCE("Location",'') AS location,
-                            point_total, rolloff_date
+                            point_total, ROUND((COALESCE(point_total, 0.0) - 1.0)::numeric, 1) AS new_point_total, rolloff_date
                        FROM employees WHERE rolloff_date IS NOT NULL
                          AND COALESCE(point_total, 0.0) >= 0.5
                          AND (rolloff_date::date) BETWEEN (%s::date) AND (%s::date)"""
         else:
             sql = """SELECT employee_id, last_name, first_name, COALESCE("Location",'') AS location,
-                            point_total, rolloff_date
+                            point_total, ROUND(COALESCE(point_total, 0.0) - 1.0, 1) AS new_point_total, rolloff_date
                        FROM employees WHERE rolloff_date IS NOT NULL
                          AND COALESCE(point_total, 0.0) >= 0.5
                          AND date(rolloff_date) BETWEEN date(?) AND date(?)"""
@@ -4996,6 +4996,17 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
 
     sql += " ORDER BY e.last_name, e.first_name" if export_type == "applied ytd roll-off history" else " ORDER BY last_name, first_name"
     df = pd.DataFrame([dict(r) for r in fetchall(conn, sql, tuple(params))])
+
+    if export_type == "upcoming 2-month roll-offs" and not df.empty:
+        df = df.rename(columns={
+            "employee_id": "Employee #",
+            "last_name": "Last Name",
+            "first_name": "First Name",
+            "location": "Location",
+            "point_total": "Current Point Total",
+            "new_point_total": "New Point Total",
+            "rolloff_date": "2 Month Roll Off Date",
+        })
 
     if export_type == "30-day point history" and not df.empty:
         if "Point" in df.columns:
