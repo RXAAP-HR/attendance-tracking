@@ -4954,19 +4954,21 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
             current_total = round(float(emp.get("point_total", 0) or 0), 1)
             if current_total <= 0.0:
                 continue
+            rolloff_pts = round(float(net_points), 1)
+            new_total = round(max(current_total - rolloff_pts, 0.0), 1)
             rows_out.append({
                 "Employee ID": int(employee_id),
                 "First Name": emp.get("first_name", ""),
                 "Last Name": emp.get("last_name", ""),
-                "Point Total": round(float(emp.get("point_total", 0) or 0), 1),
-                "Points": round(float(net_points), 1),
+                "Points Rolling Off": rolloff_pts,
+                "New Point Total": new_total,
                 "Point Date": roll_date.isoformat(),
                 "Note": "YTD Roll Off",
                 "Notes": "",
             })
         if rows_out:
             return pd.DataFrame(rows_out)
-        return pd.DataFrame(columns=["Employee ID", "First Name", "Last Name", "Point Total", "Points", "Point Date", "Note", "Notes"])
+        return pd.DataFrame(columns=["Employee ID", "First Name", "Last Name", "Points Rolling Off", "New Point Total", "Point Date", "Note", "Notes"])
 
     else:  # applied ytd roll-off history
         year_start = date(date.today().year, 1, 1)
