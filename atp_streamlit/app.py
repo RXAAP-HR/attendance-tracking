@@ -4907,13 +4907,13 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
     elif export_type == "upcoming 2-month roll-offs":
         if pg:
             sql = """SELECT employee_id, last_name, first_name, COALESCE("Location",'') AS location,
-                            point_total, ROUND((COALESCE(point_total, 0.0) - 1.0)::numeric, 1) AS new_point_total, rolloff_date
+                            point_total, GREATEST(ROUND((COALESCE(point_total, 0.0) - 1.0)::numeric, 1), 0.0) AS new_point_total, rolloff_date
                        FROM employees WHERE rolloff_date IS NOT NULL
                          AND COALESCE(point_total, 0.0) >= 0.5
                          AND (rolloff_date::date) BETWEEN (%s::date) AND (%s::date)"""
         else:
             sql = """SELECT employee_id, last_name, first_name, COALESCE("Location",'') AS location,
-                            point_total, ROUND(COALESCE(point_total, 0.0) - 1.0, 1) AS new_point_total, rolloff_date
+                            point_total, MAX(ROUND(COALESCE(point_total, 0.0) - 1.0, 1), 0.0) AS new_point_total, rolloff_date
                        FROM employees WHERE rolloff_date IS NOT NULL
                          AND COALESCE(point_total, 0.0) >= 0.5
                          AND date(rolloff_date) BETWEEN date(?) AND date(?)"""
