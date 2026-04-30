@@ -141,7 +141,8 @@ def get_employee(conn, employee_id: int):
         conn,
         """
         SELECT employee_id, last_name, first_name, COALESCE("Location", '') AS location,
-               start_date, point_total, last_point_date, rolloff_date, perfect_attendance, point_warning_date, is_active
+               start_date, point_total, last_point_date, rolloff_date, perfect_attendance, point_warning_date, is_active,
+               COALESCE(employment_type, 'Full-Time') AS employment_type
         FROM employees
         WHERE employee_id = ?;
         """,
@@ -180,12 +181,13 @@ def create_employee(
     start_date: str,
     location: str | None = None,
     manager: str | None = None,
+    employment_type: str = "Full-Time",
 ):
     _exec(
         conn,
         """
-        INSERT INTO employees (employee_id, last_name, first_name, start_date, "Location", manager, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, 1);
+        INSERT INTO employees (employee_id, last_name, first_name, start_date, "Location", manager, employment_type, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1);
         """,
         (
             int(employee_id),
@@ -194,6 +196,7 @@ def create_employee(
             str(start_date).strip(),
             (location or "").strip() or None,
             (manager or "").strip() or None,
+            employment_type or "Full-Time",
         ),
     )
 

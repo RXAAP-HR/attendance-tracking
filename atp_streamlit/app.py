@@ -941,6 +941,8 @@ def _apply_bulk_employee_override(
     update_perfect_attendance: bool = False,
     manager: str | None = None,
     update_manager: bool = False,
+    employment_type: str | None = None,
+    update_employment_type: bool = False,
     note: str | None = None,
 ) -> None:
     employee_id = int(employee_id)
@@ -982,6 +984,13 @@ def _apply_bulk_employee_override(
                 conn,
                 "UPDATE employees SET manager = ? WHERE employee_id = ?",
                 (manager or None, employee_id),
+            )
+
+        if update_employment_type:
+            exec_sql(
+                conn,
+                "UPDATE employees SET employment_type = ? WHERE employee_id = ?",
+                (employment_type or "Full-Time", employee_id),
             )
 
 
@@ -3461,6 +3470,31 @@ def pto_page(conn, building: str) -> None:
 
     df_all: pd.DataFrame = st.session_state["pto_df"].copy()
 
+    # ── Build shift_hours lookup and recompute days using PT/FT shift lengths ─
+    try:
+        _emp_type_rows = fetchall(
+            conn,
+            "SELECT employee_id, COALESCE(employment_type, 'Full-Time') AS employment_type FROM employees WHERE is_active = 1"
+        )
+        _shift_lookup: dict[int, float] = {
+            int(r["employee_id"]): (4.0 if "part" in str(r["employment_type"]).lower() else 8.0)
+            for r in _emp_type_rows
+        }
+    except Exception:
+        _shift_lookup = {}
+
+    def _get_shift_hours(eid) -> float:
+        try:
+            return _shift_lookup.get(int(eid), 8.0)
+        except (TypeError, ValueError):
+            return 8.0
+
+    if "employee_id" in df_all.columns:
+        df_all["shift_hours"] = df_all["employee_id"].apply(_get_shift_hours)
+    else:
+        df_all["shift_hours"] = 8.0
+    df_all["days"] = (df_all["hours"] / df_all["shift_hours"]).round(2)
+
     # ── 30-day PTO utilization for the At a Glance bar ───────────────────────
     _now = date.today()
     _since_30 = pd.Timestamp(_now - timedelta(days=30))
@@ -3578,13 +3612,15 @@ def pto_page(conn, building: str) -> None:
     utilization_pct = (unique_emps / denom * 100) if denom else 0
     top_type = df.groupby("pto_type")["hours"].sum().idxmax() if not df.empty else "—"
     avg_hours = total_hours / denom if denom else 0
+    total_days_kpi = df["days"].sum()
+    avg_days = total_days_kpi / denom if denom else 0
 
     with k1:
         _pto_metric("Employees Used PTO", str(unique_emps), f"{utilization_pct:.0f}% utilization")
     with k2:
         _pto_metric("Top PTO Type", top_type)
     with k3:
-        _pto_metric("Avg Days / Employee", f"{avg_hours / 8:.1f}", f"{avg_hours:.0f} hrs avg")
+        _pto_metric("Avg Days / Employee", f"{avg_days:.1f}", f"{avg_hours:.0f} hrs avg")
 
     # ── Donut chart + Monthly trend ─────────────────────────────────────────
     divider()
@@ -3710,13 +3746,13 @@ def pto_page(conn, building: str) -> None:
     # ── Building comparison ─────────────────────────────────────────────────
     divider()
     section_header("PTO Hours by Location")
-    bldg_totals = df.groupby("building")["hours"].sum().sort_values(ascending=False).reset_index()
+    bldg_totals = df.groupby("building").agg(hours=("hours", "sum"), days=("days", "sum")).sort_values("hours", ascending=False).reset_index()
     bar_fig = go.Figure(go.Bar(
         x=bldg_totals["building"],
         y=bldg_totals["hours"],
         marker=dict(color=_PTO_PALETTE[:len(bldg_totals)], line=dict(color="#060d1f", width=1)),
         hovertemplate="<b>%{x}</b>: %{y:.0f} hrs<extra></extra>",
-        text=(bldg_totals["hours"] / 8).round(1).astype(str) + "d",
+        text=bldg_totals["days"].round(1).astype(str) + "d",
         textposition="outside",
     ))
     bar_fig.update_layout(
@@ -3736,13 +3772,13 @@ def pto_page(conn, building: str) -> None:
     with tu1:
         section_header("Top PTO Users")
         top_users = (
-            df.groupby(["employee", "building"])["hours"]
-            .sum()
+            df.groupby(["employee", "building"])
+            .agg(hours=("hours", "sum"), Days=("days", "sum"))
             .reset_index()
             .sort_values("hours", ascending=False)
             .head(15)
         )
-        top_users["Days"] = (top_users["hours"] / 8).round(1)
+        top_users["Days"] = top_users["Days"].round(1)
         top_users = top_users.rename(columns={"employee": "Employee", "building": "Building", "hours": "Hours"})
         top_users["Hours"] = top_users["Hours"].round(1)
         st.dataframe(top_users[["Employee", "Building", "Days", "Hours"]], use_container_width=True, hide_index=True)
@@ -3778,7 +3814,7 @@ def pto_page(conn, building: str) -> None:
         _emp_df["Start"]  = _emp_df["start_date"].dt.strftime("%Y-%m-%d")
         _emp_df["End"]    = _emp_df["end_date"].dt.strftime("%Y-%m-%d")
         _emp_df["Hours"]  = _emp_df["hours"].round(1)
-        _emp_df["Days"]   = (_emp_df["hours"] / 8).round(1)
+        _emp_df["Days"]   = _emp_df["days"].round(1)
         _emp_df = _emp_df.rename(columns={"pto_type": "PTO Type"})
 
         _ed1, _ed2, _ed3 = st.columns(3)
@@ -3818,7 +3854,7 @@ def pto_page(conn, building: str) -> None:
         d["start_date"] = d["start_date"].dt.strftime("%Y-%m-%d")
         d["end_date"]   = d["end_date"].dt.strftime("%Y-%m-%d")
         d["Hours"] = d["hours"].round(1)
-        d["Days"]  = (d["hours"] / 8).round(1)
+        d["Days"]  = d["days"].round(1)
         d = (
             d.rename(columns={"employee": "Employee", "building": "Building",
                                "pto_type": "PTO Type", "start_date": "Start", "end_date": "End"})
@@ -3830,19 +3866,23 @@ def pto_page(conn, building: str) -> None:
     df_cls = df.copy()
     df_cls["category"] = df_cls["pto_type"].apply(_classify_pto)
     cat_hrs = df_cls.groupby("category")["hours"].sum()
+    cat_days = df_cls.groupby("category")["days"].sum()
     total_cls_h = cat_hrs.sum()
     plan_h = cat_hrs.get("Planned", 0)
     unpl_h = cat_hrs.get("Unplanned", 0)
     prot_h = cat_hrs.get("Protected / Neutral", 0)
+    plan_d = cat_days.get("Planned", 0)
+    unpl_d = cat_days.get("Unplanned", 0)
+    prot_d = cat_days.get("Protected / Neutral", 0)
 
     pv1, pv2, pv3, pv4 = st.columns(4)
     _pct = lambda h: f"{h / total_cls_h * 100:.0f}%" if total_cls_h else "—"
     with pv1:
-        _pto_metric("Planned", _pct(plan_h), f"{plan_h / 8:.1f} days")
+        _pto_metric("Planned", _pct(plan_h), f"{plan_d:.1f} days")
     with pv2:
-        _pto_metric("Unplanned", _pct(unpl_h), f"{unpl_h / 8:.1f} days")
+        _pto_metric("Unplanned", _pct(unpl_h), f"{unpl_d:.1f} days")
     with pv3:
-        _pto_metric("Protected / Neutral", _pct(prot_h), f"{prot_h / 8:.1f} days")
+        _pto_metric("Protected / Neutral", _pct(prot_h), f"{prot_d:.1f} days")
     with pv4:
         ratio_str = f"{plan_h / unpl_h:.1f}×" if unpl_h else "N/A"
         _pto_metric("Plan : Unplan Ratio", ratio_str, "higher = more predictable")
@@ -3912,7 +3952,7 @@ def pto_page(conn, building: str) -> None:
                 pass
 
     # emp_hrs / n_total_emp used by Burnout section below
-    emp_hrs = df.groupby("employee")["hours"].sum().sort_values(ascending=False).reset_index()
+    emp_hrs = df.groupby("employee").agg(hours=("hours", "sum"), days=("days", "sum")).sort_values("hours", ascending=False).reset_index()
     n_total_emp = len(emp_hrs)
 
     # ── Module 3: Burnout & Retention Risk ──────────────────────────────────
@@ -3921,7 +3961,7 @@ def pto_page(conn, building: str) -> None:
 
     low10_n = max(1, round(n_total_emp * 0.10))
     low_users = emp_hrs.tail(low10_n).copy() if n_total_emp >= 5 else pd.DataFrame()
-    low_avg_days = low_users["hours"].mean() / 8 if not low_users.empty else 0
+    low_avg_days = low_users["days"].mean() if not low_users.empty else 0
     no_pto_count = len(no_pto)
     no_pto_rate = no_pto_count / max(1, len(all_active_names)) * 100
 
@@ -3944,7 +3984,7 @@ def pto_page(conn, building: str) -> None:
     with brr:
         section_label(f"Bottom 10% of Users({low10_n} employees)")
         if not low_users.empty:
-            low_users["Days"] = (low_users["hours"] / 8).round(1)
+            low_users["Days"] = low_users["days"].round(1)
             low_users = low_users.rename(columns={"employee": "Employee", "hours": "Hours"})
             low_users["Hours"] = low_users["Hours"].round(1)
             st.dataframe(low_users[["Employee", "Hours", "Days"]], use_container_width=True, hide_index=True)
@@ -3999,11 +4039,11 @@ def pto_page(conn, building: str) -> None:
     else:
         abs_agg = (
             df_unplan.groupby(["employee", "building"])
-            .agg(events=("hours", "count"), total_hours=("hours", "sum"))
+            .agg(events=("hours", "count"), total_hours=("hours", "sum"), total_days=("days", "sum"))
             .reset_index()
         )
         abs_agg["Avg Hrs / Event"] = (abs_agg["total_hours"] / abs_agg["events"]).round(1)
-        abs_agg["Days"] = (abs_agg["total_hours"] / 8).round(1)
+        abs_agg["Days"] = abs_agg["total_days"].round(1)
         abs_agg["Total Hours"] = abs_agg["total_hours"].round(1)
         abs_agg = abs_agg.sort_values("events", ascending=False).rename(columns={
             "employee": "Employee", "building": "Building", "events": "Events",
@@ -4153,9 +4193,9 @@ def pto_page(conn, building: str) -> None:
 
     from datetime import timedelta as _td
     period_days = max(1, (date_end - date_start).days + 1)
-    total_days = total_hours / 8
+    total_days = df["days"].sum()
     annualized_total = total_days / period_days * 365
-    annualized_per_emp = avg_hours / 8 / period_days * 365 if unique_emps else 0
+    annualized_per_emp = avg_days / period_days * 365 if unique_emps else 0
 
     mid = date_start + _td(days=period_days // 2)
     fh_hrs = df[df["start_date"].dt.date < mid]["hours"].sum()
@@ -4180,7 +4220,8 @@ def pto_page(conn, building: str) -> None:
         df_season = df_season[df_season["building"] == sel_building]
     df_season["cal_month"] = df_season["start_date"].dt.month
     season = (
-        df_season.groupby("cal_month")["hours"].sum()
+        df_season.groupby("cal_month")
+        .agg(hours=("hours", "sum"), days=("days", "sum"))
         .reindex(range(1, 13)).fillna(0).reset_index()
     )
     season["label"] = [_MONTH_LABELS[m - 1] for m in season["cal_month"]]
@@ -4192,7 +4233,7 @@ def pto_page(conn, building: str) -> None:
             colorscale=[[0, "#0d1b2e"], [0.5, "#7b61ff"], [1, "#00d4ff"]],
             line=dict(color="#060d1f", width=1),
         ),
-        text=(season["hours"] / 8).round(0).astype(int).astype(str) + "d",
+        text=season["days"].round(0).astype(int).astype(str) + "d",
         textposition="outside",
         hovertemplate="<b>%{x}</b>: %{y:.0f} total hrs<extra></extra>",
     ))
@@ -4663,9 +4704,10 @@ def manage_employees_page(conn) -> None:
                 first      = st.text_input("First Name")
                 last       = st.text_input("Last Name")
                 start_date = st.date_input("Hire / Start Date", value=date.today())
-                location   = st.selectbox("Building", BLDG_OPTS)
-                manager    = st.text_input("Manager")
-                added      = st.form_submit_button("Add Employee", use_container_width=True)
+                location        = st.selectbox("Building", BLDG_OPTS)
+                manager         = st.text_input("Manager")
+                employment_type = st.selectbox("Status", ["Full-Time", "Part-Time"])
+                added           = st.form_submit_button("Add Employee", use_container_width=True)
 
             if added:
                 if not first.strip() or not last.strip():
@@ -4680,6 +4722,7 @@ def manage_employees_page(conn) -> None:
                             start_date,
                             location or None,
                             manager.strip() or None,
+                            employment_type,
                         )
                         conn.commit()
                         clear_read_caches()
@@ -4721,6 +4764,9 @@ def manage_employees_page(conn) -> None:
         rolloff_raw = str(emp.get("rolloff_date") or "")[:10]
         perfect_raw = str(emp.get("perfect_attendance") or "")[:10]
         manager_raw = str(emp.get("manager") or "")
+        emp_type_raw = str(emp.get("employment_type") or "Full-Time")
+        emp_type_opts = ["Full-Time", "Part-Time"]
+        emp_type_idx = emp_type_opts.index(emp_type_raw) if emp_type_raw in emp_type_opts else 0
         try:
             start_val = date.fromisoformat(start_raw) if start_raw else date.today()
         except ValueError:
@@ -4734,9 +4780,10 @@ def manage_employees_page(conn) -> None:
                 first_e   = st.text_input("First Name", value=emp.get("first_name") or "")
                 last_e    = st.text_input("Last Name",  value=emp.get("last_name") or "")
                 start_e   = st.date_input("Hire / Start Date", value=start_val)
-                bldg_e    = st.selectbox("Building", BLDG_OPTS, index=loc_idx)
-                manager_e = st.text_input("Manager", value=manager_raw)
-                act_e     = st.checkbox("Active", value=bool(emp.get("is_active", 1)))
+                bldg_e          = st.selectbox("Building", BLDG_OPTS, index=loc_idx)
+                manager_e       = st.text_input("Manager", value=manager_raw)
+                emp_type_e      = st.selectbox("Status", emp_type_opts, index=emp_type_idx)
+                act_e           = st.checkbox("Active", value=bool(emp.get("is_active", 1)))
                 rolloff_e = st.text_input(
                     "2-Month Roll-off Date (MM/DD/YYYY)",
                     value=(datetime.strptime(rolloff_raw, "%Y-%m-%d").strftime("%m/%d/%Y") if rolloff_raw else ""),
@@ -4760,13 +4807,14 @@ def manage_employees_page(conn) -> None:
                     )
                     exec_sql(
                         conn,
-                        'UPDATE employees SET first_name=?, last_name=?, start_date=?, "Location"=?, manager=?, is_active=?, rolloff_date=?, perfect_attendance=? WHERE employee_id=?',
+                        'UPDATE employees SET first_name=?, last_name=?, start_date=?, "Location"=?, manager=?, employment_type=?, is_active=?, rolloff_date=?, perfect_attendance=? WHERE employee_id=?',
                         (
                             first_e.strip(),
                             last_e.strip(),
                             start_e.isoformat(),
                             bldg_e or None,
                             manager_e.strip() or None,
+                            emp_type_e,
                             1 if act_e else 0,
                             rolloff_new_iso,
                             perfect_new_iso,
@@ -5261,8 +5309,8 @@ def maintenance_page(conn) -> None:
             st.caption("The corrected point totals and date overrides are now saved in the tracker.")
     section_label("Bulk Employee Override")
     st.caption("Upload a CSV with corrected employee data. Required column: **Employee #**. "
-               "Optional columns: **Point Total**, **2 Month Roll Off Date**, **Perfect Attendance Date**, **Manager**. "
-               "Point adjustments are inserted as history entries; dates and manager are set directly.")
+               "Optional columns: **Point Total**, **2 Month Roll Off Date**, **Perfect Attendance Date**, **Manager**, **Status**. "
+               "Point adjustments are inserted as history entries; dates, manager, and status are set directly.")
     uploaded = st.file_uploader("Upload corrections CSV", type=["csv"], key="bulk_override_csv")
     current_upload_sig = None
     if uploaded is None:
@@ -5299,10 +5347,11 @@ def maintenance_page(conn) -> None:
                     has_rolloff = "2 Month Roll Off Date" in csv_df.columns
                     has_perfect = "Perfect Attendance Date" in csv_df.columns
                     has_manager = "Manager" in csv_df.columns
-                    if not (has_points or has_rolloff or has_perfect or has_manager):
+                    has_status = "Status" in csv_df.columns
+                    if not (has_points or has_rolloff or has_perfect or has_manager or has_status):
                         st.session_state["bulk_override_parse_error"] = (
                             "CSV must contain at least one of: 'Point Total', '2 Month Roll Off Date', "
-                            "'Perfect Attendance Date', 'Manager'."
+                            "'Perfect Attendance Date', 'Manager', 'Status'."
                         )
                     else:
                         changes = []
@@ -5387,6 +5436,19 @@ def maintenance_page(conn) -> None:
                                 if new_mgr != cur_mgr:
                                     changed = True
 
+                            if has_status:
+                                raw_status = str(row["Status"]).strip() if not pd.isna(row["Status"]) else ""
+                                if raw_status.upper() in ("PT", "PART-TIME", "PART TIME"):
+                                    new_status = "Part-Time"
+                                else:
+                                    new_status = "Full-Time"
+                                cur_status = str(emp.get("employment_type") or "Full-Time").strip()
+                                change["Current Status"] = cur_status
+                                change["New Status"] = new_status
+                                change["_update_status"] = new_status != cur_status
+                                if new_status != cur_status:
+                                    changed = True
+
                             if changed:
                                 changes.append(change)
 
@@ -5402,7 +5464,7 @@ def maintenance_page(conn) -> None:
                         }
                         if changes:
                             chg_df = pd.DataFrame(changes).drop(
-                                columns=["_update_points", "_update_rolloff", "_update_perfect", "_update_manager"],
+                                columns=["_update_points", "_update_rolloff", "_update_perfect", "_update_manager", "_update_status"],
                                 errors="ignore",
                             )
                             st.session_state["bulk_override_changes"] = changes
@@ -5473,6 +5535,8 @@ def maintenance_page(conn) -> None:
                         update_perfect_attendance=bool(chg.get("_update_perfect")),
                         manager=chg.get("New Manager") or None,
                         update_manager=bool(chg.get("_update_manager")),
+                        employment_type=chg.get("New Status") or "Full-Time",
+                        update_employment_type=bool(chg.get("_update_status")),
                         note="Bulk override — prior calculation correction",
                     )
                     applied += 1

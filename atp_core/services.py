@@ -470,6 +470,7 @@ def create_employee(
     start_date: date,
     location: str | None = None,
     manager: str | None = None,
+    employment_type: str = "Full-Time",
 ) -> None:
     if employee_id is None:
         raise ValueError("Employee ID is required.")
@@ -489,6 +490,7 @@ def create_employee(
             start_date=start_date.isoformat(),
             location=(location or "").strip(),
             manager=(manager or "").strip() or None,
+            employment_type=employment_type or "Full-Time",
         )
         recalculate_employee_dates(conn, int(employee_id))
 
