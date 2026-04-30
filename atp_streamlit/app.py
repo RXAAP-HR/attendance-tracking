@@ -3273,6 +3273,7 @@ _PTO_TYPE_COLORS = {
     "Vacation": "#00d4ff",  # light blue
     "Personal": "#7b61ff",  # purple
     "Absence":  "#ff6b6b",  # red
+    "FMLA":     "#f5c542",  # yellow
     "Other":    "#6b7280",  # dark gray
 }
 
