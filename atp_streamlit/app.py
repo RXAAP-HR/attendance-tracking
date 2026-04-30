@@ -3765,6 +3765,37 @@ def pto_page(conn, building: str) -> None:
         else:
             info_box("All active employees have PTO recorded in this period.")
 
+    # ── Employee Detail Drilldown ────────────────────────────────────────────
+    divider()
+    section_header("Employee Detail")
+    _all_emp_names = sorted(df["employee"].unique())
+    _sel_emp = st.selectbox("Select employee", _all_emp_names, index=None,
+                            placeholder="Choose an employee…", key="pto_emp_detail")
+    if _sel_emp:
+        _emp_df = df[df["employee"] == _sel_emp].copy()
+        _emp_df = _emp_df.sort_values("start_date")
+        _emp_df["Start"]  = _emp_df["start_date"].dt.strftime("%Y-%m-%d")
+        _emp_df["End"]    = _emp_df["end_date"].dt.strftime("%Y-%m-%d")
+        _emp_df["Hours"]  = _emp_df["hours"].round(1)
+        _emp_df["Days"]   = (_emp_df["hours"] / 8).round(1)
+        _emp_df = _emp_df.rename(columns={"pto_type": "PTO Type"})
+
+        _ed1, _ed2, _ed3 = st.columns(3)
+        with _ed1:
+            _pto_metric("Total Hours", f"{_emp_df['Hours'].sum():,.1f}", f"{_emp_df['Days'].sum():.1f} days")
+        with _ed2:
+            _pto_metric("Total Events", str(len(_emp_df)), "individual records")
+        with _ed3:
+            _top_emp_type = _emp_df.groupby("PTO Type")["Hours"].sum().idxmax()
+            _pto_metric("Most Used Type", _top_emp_type)
+
+        st.dataframe(
+            _emp_df[["PTO Type", "Start", "End", "Hours", "Days"]],
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        info_box("Select an employee above to inspect their individual PTO records.")
+
     # ── Module 1: Planned vs Unplanned ──────────────────────────────────────
     divider()
     section_header("Planned vs Unplanned PTO")
