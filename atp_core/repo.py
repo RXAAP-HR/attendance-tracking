@@ -393,6 +393,9 @@ def save_pto_data(conn, rows: list) -> dict[str, int]:
         except (ValueError, TypeError):
             employee_id = None
 
+        rd = row.get("request_date")
+        request_date = str(rd)[:10] if rd and str(rd).strip() not in ("", "nan", "None") else None
+
         return (
             employee_id,
             str(row.get("last_name", "")).strip(),
@@ -402,6 +405,7 @@ def save_pto_data(conn, rows: list) -> dict[str, int]:
             str(row.get("start_date", ""))[:10],
             str(row.get("end_date", ""))[:10],
             round(float(row.get("hours", 0) or 0), 3),
+            request_date,
         )
 
     existing_rows = load_pto_data(conn)
@@ -423,8 +427,8 @@ def save_pto_data(conn, rows: list) -> dict[str, int]:
         _exec(
             conn,
             """
-            INSERT INTO pto_uploads (employee_id, last_name, first_name, building, pto_type, start_date, end_date, hours)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO pto_uploads (employee_id, last_name, first_name, building, pto_type, start_date, end_date, hours, request_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             payload,
         )
@@ -444,7 +448,7 @@ def load_pto_data(conn) -> list:
     return _fetchall(
         conn,
         """
-        SELECT employee_id, last_name, first_name, building, pto_type, start_date, end_date, hours
+        SELECT employee_id, last_name, first_name, building, pto_type, start_date, end_date, hours, request_date
         FROM pto_uploads
         ORDER BY start_date, last_name, first_name;
         """,

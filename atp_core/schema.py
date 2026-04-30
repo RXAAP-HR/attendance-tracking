@@ -57,9 +57,11 @@ def ensure_schema(conn):
             pto_type TEXT,
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL,
-            hours DOUBLE PRECISION DEFAULT 0.0
+            hours DOUBLE PRECISION DEFAULT 0.0,
+            request_date TEXT
         );
         """)
+        cur.execute("ALTER TABLE pto_uploads ADD COLUMN IF NOT EXISTS request_date TEXT;")
 
         # Indexes (idempotent)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_emp_name ON employees(last_name, first_name);")
@@ -126,9 +128,14 @@ def ensure_schema(conn):
             pto_type TEXT,
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL,
-            hours REAL DEFAULT 0.0
+            hours REAL DEFAULT 0.0,
+            request_date TEXT
         );
     """)
+    cur.execute("PRAGMA table_info(pto_uploads);")
+    pto_cols = [r[1] for r in cur.fetchall()]
+    if "request_date" not in pto_cols:
+        cur.execute("ALTER TABLE pto_uploads ADD COLUMN request_date TEXT;")
 
     # Indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_emp_name ON employees(last_name, first_name);")

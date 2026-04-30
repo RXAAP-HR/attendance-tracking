@@ -139,6 +139,28 @@ def generate_manager_pto_pdf(
     df["days"] = df.apply(
         lambda row: row["hours"] / shift_hours.get(row["employee"], 8.0), axis=1
     )
+    if "request_date" not in df.columns:
+        df["request_date"] = pd.NaT
+    else:
+        df["request_date"] = pd.to_datetime(df["request_date"], errors="coerce")
+
+    _PROTECTED = {"jury duty", "bereavement", "fmla"}
+    _PLANNED_TYPES_FB   = {"vacation", "floating holiday", "reward pto", "personal"}
+    _UNPLANNED_TYPES_FB = {"absence", "absence (sick)", "absence (covid)", "long term sick leave"}
+
+    def _classify_pdf_row(row) -> str:
+        tl = str(row.get("pto_type", "")).strip().lower()
+        if tl in _PROTECTED:
+            return "Protected / Neutral"
+        rd = row.get("request_date")
+        sd = row.get("start_date")
+        if pd.notna(rd) and pd.notna(sd):
+            return "Planned" if rd < sd else "Unplanned"
+        if tl in _PLANNED_TYPES_FB:   return "Planned"
+        if tl in _UNPLANNED_TYPES_FB: return "Unplanned"
+        return "Other"
+
+    df["_category"] = df.apply(_classify_pdf_row, axis=1)
 
     period_str = f"{date_start.strftime('%B %d, %Y')} \u2013 {date_end.strftime('%B %d, %Y')}"
     gen_date   = date.today().strftime("%B %d, %Y")
@@ -165,10 +187,8 @@ def generate_manager_pto_pdf(
     total_hrs  = df["hours"].sum()
     total_days = df["days"].sum()
     total_emps = df["employee"].nunique()
-    _unplan = {"absence", "absence (sick)", "absence (covid)", "long term sick leave"}
-    _plan   = {"vacation", "floating holiday", "reward pto", "personal"}
-    unplan_days = df[df["pto_type"].str.strip().str.lower().isin(_unplan)]["days"].sum()
-    plan_days   = df[df["pto_type"].str.strip().str.lower().isin(_plan)]["days"].sum()
+    plan_days   = df[df["_category"] == "Planned"]["days"].sum()
+    unplan_days = df[df["_category"] == "Unplanned"]["days"].sum()
 
     overview = [
         ["Total PTO Hours",      f"{total_hrs:,.0f}"],

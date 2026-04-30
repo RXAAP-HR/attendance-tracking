@@ -45,7 +45,7 @@ from atp_streamlit.ca_pdf import generate_ca_pdf
 from atp_streamlit.pto_pdf import generate_manager_pto_pdf
 
 BUILDINGS = ["APIM", "APIS", "AAP"]
-POINT_BALANCE_REPAIR_VERSION = 3
+POINT_BALANCE_REPAIR_VERSION = 4
 EMPLOYEE_CACHE_TTL_SECONDS = 60
 DASHBOARD_CACHE_TTL_SECONDS = 90
 LEDGER_HISTORY_DEFAULT_LIMIT = 500
@@ -820,6 +820,7 @@ def _initialize_database(db_key: str, repair_version: int) -> None:
             exec_sql(conn, "ALTER TABLE employees ADD COLUMN IF NOT EXISTS point_warning_date DATE")
             exec_sql(conn, "ALTER TABLE employees ADD COLUMN IF NOT EXISTS manager TEXT")
             exec_sql(conn, "ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type TEXT DEFAULT 'Full-Time'")
+            exec_sql(conn, "ALTER TABLE pto_uploads ADD COLUMN IF NOT EXISTS request_date TEXT")
             conn.commit()
         else:
             cols = [r[1] for r in fetchall(conn, "PRAGMA table_info(employees)")]
@@ -829,6 +830,9 @@ def _initialize_database(db_key: str, repair_version: int) -> None:
                 exec_sql(conn, "ALTER TABLE employees ADD COLUMN manager TEXT")
             if "employment_type" not in cols:
                 exec_sql(conn, "ALTER TABLE employees ADD COLUMN employment_type TEXT DEFAULT 'Full-Time'")
+            pto_cols = [r[1] for r in fetchall(conn, "PRAGMA table_info(pto_uploads)")]
+            if "request_date" not in pto_cols:
+                exec_sql(conn, "ALTER TABLE pto_uploads ADD COLUMN request_date TEXT")
             conn.commit()
     except Exception:
         pass
@@ -3280,13 +3284,13 @@ _BULK_OVERRIDE_TEMPLATE_CSV = (
 )
 
 _PTO_SAMPLE_CSV = (
-    "employee_id,last_name,first_name,building,pto_type,start_date,end_date,hours\n"
-    "101,Smith,Jane,APIM,Vacation,2025-01-06,2025-01-10,40\n"
-    "102,Jones,Bob,APIS,Sick,2025-01-07,2025-01-07,4\n"
-    "103,Davis,Carol,AAP,Personal,2025-01-08,2025-01-08,8\n"
-    "104,Wilson,Tom,APIM,FMLA,2025-01-13,2025-01-24,80\n"
-    "105,Brown,Alice,APIS,Bereavement,2025-01-13,2025-01-15,24\n"
-    "106,Green,Mark,AAP,Vacation,2025-02-03,2025-02-07,40\n"
+    "employee_id,last_name,first_name,building,pto_type,start_date,end_date,hours,request_date\n"
+    "101,Smith,Jane,APIM,Vacation,2025-01-06,2025-01-10,40,2024-12-20\n"
+    "102,Jones,Bob,APIS,Absence,2025-01-07,2025-01-07,4,2025-01-07\n"
+    "103,Davis,Carol,AAP,Personal,2025-01-08,2025-01-08,8,2025-01-03\n"
+    "104,Wilson,Tom,APIM,FMLA,2025-01-13,2025-01-24,80,2025-01-10\n"
+    "105,Brown,Alice,APIS,Bereavement,2025-01-13,2025-01-15,24,2025-01-13\n"
+    "106,Green,Mark,AAP,Vacation,2025-02-03,2025-02-07,40,2025-01-28\n"
 )
 
 
@@ -3345,6 +3349,10 @@ def pto_page(conn, building: str) -> None:
         _df["pto_type"] = _df["pto_type"].astype(str).str.strip()
         _df["employee"] = _df["last_name"].str.strip() + ", " + _df["first_name"].str.strip()
         _df["days"] = (_df["hours"] / 8).round(2)
+        if "request_date" in _df.columns:
+            _df["request_date"] = pd.to_datetime(_df["request_date"], errors="coerce")
+        else:
+            _df["request_date"] = pd.NaT
         st.session_state["pto_df"] = _df
         return True
 
@@ -3384,6 +3392,10 @@ def pto_page(conn, building: str) -> None:
                     df["pto_type"] = df["pto_type"].astype(str).str.strip()
                     df["employee"] = df["last_name"].str.strip() + ", " + df["first_name"].str.strip()
                     df["days"] = (df["hours"] / 8).round(2)
+                    if "request_date" in df.columns:
+                        df["request_date"] = pd.to_datetime(df["request_date"], errors="coerce")
+                    else:
+                        df["request_date"] = pd.NaT
 
                     # Build name→id lookup from DB for reliable export
                     _name_to_id: dict = {
@@ -3852,11 +3864,23 @@ def pto_page(conn, building: str) -> None:
     _PROTECTED_TYPES = {"jury duty", "bereavement", "fmla"}
 
     def _classify_pto(t: str) -> str:
+        """Type-based fallback used when request_date is unavailable."""
         tl = t.strip().lower()
         if tl in _PLANNED_TYPES:   return "Planned"
         if tl in _UNPLANNED_TYPES: return "Unplanned"
         if tl in _PROTECTED_TYPES: return "Protected / Neutral"
         return "Other"
+
+    def _classify_row(row) -> str:
+        """Classify using request_date vs start_date when available; fall back to type."""
+        tl = str(row["pto_type"]).strip().lower()
+        if tl in _PROTECTED_TYPES:
+            return "Protected / Neutral"
+        rd = row.get("request_date")
+        sd = row.get("start_date")
+        if pd.notna(rd) and pd.notna(sd):
+            return "Planned" if rd < sd else "Unplanned"
+        return _classify_pto(tl)
 
     def _drill_table(source_df: pd.DataFrame, label: str) -> None:
         section_label(f"Employees — {label}")
@@ -3874,7 +3898,7 @@ def pto_page(conn, building: str) -> None:
         st.dataframe(d, use_container_width=True, hide_index=True)
 
     df_cls = df.copy()
-    df_cls["category"] = df_cls["pto_type"].apply(_classify_pto)
+    df_cls["category"] = df_cls.apply(_classify_row, axis=1)
     cat_hrs = df_cls.groupby("category")["hours"].sum()
     cat_days = df_cls.groupby("category")["days"].sum()
     total_cls_d = cat_days.sum()
@@ -4003,8 +4027,7 @@ def pto_page(conn, building: str) -> None:
     # ── Monday / Friday Absence Pattern ─────────────────────────────────────
     divider()
     section_header("Monday / Friday Absence Pattern")
-    _UNPLANNED_LOWER = {"absence", "absence (sick)", "absence (covid)", "long term sick leave"}
-    df_unplan = df[df["pto_type"].str.strip().str.lower().isin(_UNPLANNED_LOWER)].copy()
+    df_unplan = df[df.apply(_classify_row, axis=1) == "Unplanned"].copy()
     if df_unplan.empty:
         info_box("No unplanned absence records in the selected period.")
     else:
