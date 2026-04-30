@@ -104,6 +104,7 @@ def generate_manager_pto_pdf(
     date_start: date,
     date_end: date,
     building: str = "All",
+    mgr_points: dict | None = None,
 ) -> bytes:
     """
     df                  — filtered PTO DataFrame (employee_id, employee, pto_type, hours, …)
@@ -210,6 +211,8 @@ def generate_manager_pto_pdf(
     story.append(ov_tbl)
     story.append(PageBreak())
 
+    mgr_points = mgr_points or {}
+
     # ── Per-manager pages ────────────────────────────────────────────────────
     for mgr in sorted(df["manager"].unique()):
         mgr_df   = df[df["manager"] == mgr]
@@ -218,6 +221,10 @@ def generate_manager_pto_pdf(
 
         story.append(Paragraph(f"Manager: {mgr}", s["section_title"]))
         story.append(HRFlowable(width=BODY_W, thickness=0.5, color=_RULE, spaceAfter=6))
+        story.append(Paragraph(f"Report Period: {period_str}", s["meta"]))
+        if building != "All":
+            story.append(Paragraph(f"Location: {building}", s["meta"]))
+        story.append(Spacer(1, 0.06 * inch))
         story.append(Paragraph(
             f"Employees Using PTO: <b>{mgr_emps}</b> &nbsp;&nbsp;|&nbsp;&nbsp; "
             f"Total Hours: <b>{mgr_hrs:,.0f}</b>",
@@ -265,6 +272,30 @@ def generate_manager_pto_pdf(
             [3.5, 1.25, 1.25],
             s,
         ))
+        # Attendance points accrued this period
+        pts_data = mgr_points.get(mgr, {})
+        pts_total = pts_data.get("total", 0.0)
+        pts_emps  = pts_data.get("employees", {})
+        story.append(Spacer(1, 0.15 * inch))
+        story.append(Paragraph("Attendance Points Accrued This Period", s["label"]))
+        story.append(Spacer(1, 0.04 * inch))
+        if pts_emps:
+            story.append(Paragraph(
+                f"Total Points Issued: <b>{pts_total:g}</b> across "
+                f"<b>{len(pts_emps)}</b> employee(s)",
+                s["body"],
+            ))
+            story.append(Spacer(1, 0.04 * inch))
+            pts_rows = sorted(pts_emps.items(), key=lambda x: -x[1])
+            story.append(_data_table(
+                ["Employee", "Points"],
+                [[name, f"{pts:g}"] for name, pts in pts_rows],
+                [4.5, 1.5],
+                s,
+            ))
+        else:
+            story.append(Paragraph("No attendance points issued this period.", s["note"]))
+
         story.append(Spacer(1, 0.15 * inch))
 
         # Zero PTO employees under this manager

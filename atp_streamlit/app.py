@@ -4329,9 +4329,32 @@ def pto_page(conn, building: str) -> None:
                     _mgr  = _mgr_lookup.get(_eid, "Unassigned")
                     _name = f"{_e['last_name'].strip()}, {_e['first_name'].strip()}"
                     _mgr_to_emps.setdefault(_mgr, []).append(_name)
+
+                # Points accrued per manager in the date range (positive entries only)
+                _pts_rows = fetchall(
+                    conn,
+                    "SELECT ph.employee_id, e.last_name, e.first_name, ph.points "
+                    "FROM points_history ph "
+                    "JOIN employees e ON e.employee_id = ph.employee_id "
+                    "WHERE ph.points > 0 "
+                    "  AND date(ph.point_date) >= date(?) "
+                    "  AND date(ph.point_date) <= date(?)",
+                    (date_start.isoformat(), date_end.isoformat()),
+                )
+                _mgr_points: dict[str, dict] = {}
+                for _pr in _pts_rows:
+                    _eid  = int(_pr["employee_id"])
+                    _mgr  = _mgr_lookup.get(_eid, "Unassigned")
+                    _emp_name = f"{str(_pr['last_name']).strip()}, {str(_pr['first_name']).strip()}"
+                    _entry = _mgr_points.setdefault(_mgr, {"total": 0.0, "employees": {}})
+                    _entry["total"] = round(_entry["total"] + float(_pr["points"]), 3)
+                    _entry["employees"][_emp_name] = round(
+                        _entry["employees"].get(_emp_name, 0.0) + float(_pr["points"]), 3
+                    )
+
                 st.session_state["_mgr_pto_pdf"] = generate_manager_pto_pdf(
                     df, _mgr_lookup, _mgr_to_emps, _shift_hours,
-                    date_start, date_end, sel_building,
+                    date_start, date_end, sel_building, _mgr_points,
                 )
             st.toast("Manager report ready for download.")
     with _rpt_c2:
