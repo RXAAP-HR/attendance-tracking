@@ -3566,16 +3566,8 @@ def pto_page(conn, building: str) -> None:
     # ── KPI tiles ───────────────────────────────────────────────────────────
     divider()
     section_header("Summary")
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3 = st.columns(3)
     total_hours = df["hours"].sum()
-    # Count distinct weekday dates (Mon-Fri) where ANY employee had PTO.
-    # Expand every record's start_date..end_date into business days,
-    # union across all employees, then count unique dates.
-    _pto_date_set: set = set()
-    for _sd, _ed in zip(df["start_date"], df["end_date"]):
-        for _d in _weekday_date_range(_sd, _ed):
-            _pto_date_set.add(pd.Timestamp(_d).normalize())
-    total_dates_impacted = len(_pto_date_set)
     unique_emps = df["employee"].nunique()
     # Denominator is active DB headcount for the selected building — not the CSV
     denom = active_count_in_scope if sel_building == building else (
@@ -3584,15 +3576,13 @@ def pto_page(conn, building: str) -> None:
     )
     utilization_pct = (unique_emps / denom * 100) if denom else 0
     top_type = df.groupby("pto_type")["hours"].sum().idxmax() if not df.empty else "—"
-    avg_hours = total_hours / unique_emps if unique_emps else 0
+    avg_hours = total_hours / denom if denom else 0
 
     with k1:
-        _pto_metric("Days Impacted", f"{total_dates_impacted:,}", f"{total_hours:,.0f} total hours")
-    with k2:
         _pto_metric("Employees Used PTO", str(unique_emps), f"{utilization_pct:.0f}% utilization")
-    with k3:
+    with k2:
         _pto_metric("Top PTO Type", top_type)
-    with k4:
+    with k3:
         _pto_metric("Avg Days / Employee", f"{avg_hours / 8:.1f}", f"{avg_hours:.0f} hrs avg")
 
     # ── Donut chart + Monthly trend ─────────────────────────────────────────
@@ -3718,77 +3708,25 @@ def pto_page(conn, building: str) -> None:
 
     # ── Building comparison ─────────────────────────────────────────────────
     divider()
-    bc1, bc2 = st.columns(2)
-
-    with bc1:
-        section_header("PTO Hours by Location")
-        bldg_totals = df.groupby("building")["hours"].sum().sort_values(ascending=False).reset_index()
-        bar_fig = go.Figure(go.Bar(
-            x=bldg_totals["building"],
-            y=bldg_totals["hours"],
-            marker=dict(color=_PTO_PALETTE[:len(bldg_totals)], line=dict(color="#060d1f", width=1)),
-            hovertemplate="<b>%{x}</b>: %{y:.0f} hrs<extra></extra>",
-            text=(bldg_totals["hours"] / 8).round(1).astype(str) + "d",
-            textposition="outside",
-        ))
-        bar_fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
-            xaxis=dict(showgrid=False, color="#4a7fa5"),
-            yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Hours"),
-            margin=dict(t=10, b=10, l=10, r=10),
-        )
-        st.plotly_chart(bar_fig, use_container_width=True, key="pto_bldg_bar")
-
-    with bc2:
-        section_header("Day of the Week PTO Trends")
-        dow_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
-        df_dow = df.copy()
-        df_dow["dow"] = df_dow["start_date"].dt.dayofweek
-        df_dow["dow_label"] = df_dow["dow"].map(dow_map)
-        dow_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-        _DOW_FOCUS = {"Personal", "Vacation", "Absence"}
-        _DOW_COLORS = {"Vacation": "#00d4ff", "Personal": "#7b61ff", "Absence": "#ff6b6b", "Other": "#6b7280"}
-        df_dow_filtered = df_dow[df_dow["dow_label"].isin(dow_order)].copy()
-        df_dow_filtered["dow_category"] = df_dow_filtered["pto_type"].apply(
-            lambda t: t if t in _DOW_FOCUS else "Other"
-        )
-        dow_pivot = (
-            df_dow_filtered
-            .groupby(["dow_label", "dow_category"])["hours"]
-            .sum()
-            .reset_index()
-        )
-        dow_cat_order = ["Vacation", "Personal", "Absence", "Other"]
-        dow_cat_order = [c for c in dow_cat_order if c in dow_pivot["dow_category"].unique()]
-        dow_traces = []
-        for pt in dow_cat_order:
-            subset = (
-                dow_pivot[dow_pivot["dow_category"] == pt]
-                .set_index("dow_label")
-                .reindex(dow_order)["hours"]
-                .fillna(0)
-            )
-            dow_traces.append(go.Bar(
-                name=pt,
-                x=dow_order,
-                y=subset.values,
-                marker=dict(color=_DOW_COLORS.get(pt, "#7b61ff"), line=dict(color="#060d1f", width=1)),
-                hovertemplate=f"<b>%{{x}}</b> — {pt}: %{{y:.0f}} hrs<extra></extra>",
-            ))
-        dow_fig = go.Figure(data=dow_traces)
-        dow_fig.update_layout(
-            barmode="stack",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
-            xaxis=dict(showgrid=False, color="#4a7fa5"),
-            yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Hours"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10, color="#4a7fa5")),
-            margin=dict(t=30, b=10, l=10, r=10),
-        )
-        st.plotly_chart(dow_fig, use_container_width=True, key="pto_dow_bar")
+    section_header("PTO Hours by Location")
+    bldg_totals = df.groupby("building")["hours"].sum().sort_values(ascending=False).reset_index()
+    bar_fig = go.Figure(go.Bar(
+        x=bldg_totals["building"],
+        y=bldg_totals["hours"],
+        marker=dict(color=_PTO_PALETTE[:len(bldg_totals)], line=dict(color="#060d1f", width=1)),
+        hovertemplate="<b>%{x}</b>: %{y:.0f} hrs<extra></extra>",
+        text=(bldg_totals["hours"] / 8).round(1).astype(str) + "d",
+        textposition="outside",
+    ))
+    bar_fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
+        xaxis=dict(showgrid=False, color="#4a7fa5"),
+        yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Hours"),
+        margin=dict(t=10, b=10, l=10, r=10),
+    )
+    st.plotly_chart(bar_fig, use_container_width=True, key="pto_bldg_bar")
 
     # ── Top PTO users ───────────────────────────────────────────────────────
     divider()
@@ -3941,156 +3879,9 @@ def pto_page(conn, building: str) -> None:
             except Exception:
                 pass
 
-    # ── Module 2: Concentration ──────────────────────────────────────
-    divider()
-    section_header("PTO Concentration \u2014 Who's Driving Usage?")
-
+    # emp_hrs / n_total_emp used by Burnout section below
     emp_hrs = df.groupby("employee")["hours"].sum().sort_values(ascending=False).reset_index()
     n_total_emp = len(emp_hrs)
-    top10_n = max(1, round(n_total_emp * 0.10))
-    total_emp_hrs = emp_hrs["hours"].sum()
-    top10_pct_hrs = emp_hrs.head(top10_n)["hours"].sum() / total_emp_hrs * 100 if total_emp_hrs else 0
-    concentration_label = "High" if top10_pct_hrs > 50 else ("Moderate" if top10_pct_hrs > 33 else "Even")
-
-    cn1, cn2, cn3 = st.columns(3)
-    with cn1:
-        _pto_metric("Employees using PTO", str(n_total_emp), "in selected period")
-    with cn2:
-        _pto_metric(f"Top 10% ({top10_n} people)", f"{top10_pct_hrs:.0f}% of hours", "concentration signal")
-    with cn3:
-        _pto_metric("Distribution", concentration_label, "of PTO across team")
-
-    # Pre-compute histogram bins before column block so they're accessible for drilldown
-    import numpy as _np
-    _max_h = max(float(emp_hrs["hours"].max()), 1.0)
-    _bin_edges = list(_np.linspace(0, _max_h, 11))
-    _bin_labels = [f"{int(_bin_edges[i])}\u2013{int(_bin_edges[i+1])}h" for i in range(10)]
-    _emp_hrs_b = emp_hrs.copy()
-    _emp_hrs_b["bin"] = pd.cut(_emp_hrs_b["hours"], bins=_bin_edges, labels=_bin_labels, include_lowest=True)
-    _bin_counts = _emp_hrs_b.groupby("bin", observed=False)["hours"].count().reindex(_bin_labels).fillna(0)
-
-    top10_hrs_sum = emp_hrs.head(10)["hours"].sum()
-    rest_hrs_sum = emp_hrs.iloc[10:]["hours"].sum() if n_total_emp > 10 else 0
-
-    conc_event = None
-    hist_event = None
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        conc_fig = go.Figure(go.Bar(
-            y=["Top 10 Users", "Rest of Team"],
-            x=[top10_hrs_sum, rest_hrs_sum],
-            orientation="h",
-            marker=dict(color=["#00d4ff", "#1a3a5c"], line=dict(color="#060d1f", width=1)),
-            text=[f"{top10_hrs_sum / 8:.0f}d", f"{rest_hrs_sum / 8:.0f}d"],
-            textposition="inside",
-            textfont=dict(color="#e8f4fd"),
-            hovertemplate="<b>%{y}</b>: %{x:.0f} hrs<extra></extra>",
-        ))
-        conc_fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
-            xaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Hours"),
-            yaxis=dict(showgrid=False, color="#4a7fa5"),
-            margin=dict(t=10, b=10, l=10, r=10),
-            height=180,
-        )
-        conc_event = st.plotly_chart(conc_fig, use_container_width=True, on_select="rerun", key="pto_conc_bar")
-    with cc2:
-        hist_fig = go.Figure(go.Bar(
-            x=_bin_labels,
-            y=_bin_counts.values,
-            marker=dict(color="#7b61ff", line=dict(color="#060d1f", width=1)),
-            hovertemplate="<b>%{x}</b>: %{y} employees<extra></extra>",
-        ))
-        hist_fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
-            xaxis=dict(showgrid=False, color="#4a7fa5", title="Total Hours Used", tickangle=-30),
-            yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="# Employees"),
-            margin=dict(t=10, b=10, l=10, r=10),
-            height=180,
-            bargap=0.05,
-        )
-        hist_event = st.plotly_chart(hist_fig, use_container_width=True, on_select="rerun", key="pto_dist_hist")
-
-    # Concentration drilldowns — rendered outside columns at full width
-    conc_pts = conc_event.selection.get("points", []) if (conc_event and conc_event.selection) else []
-    if conc_pts:
-        bar_label = conc_pts[0].get("y") or conc_pts[0].get("label") or ""
-        if bar_label in ("Top 10 Users", "Rest of Team"):
-            _group = emp_hrs.head(10) if bar_label == "Top 10 Users" else emp_hrs.iloc[10:]
-            _grp_names = set(_group["employee"])
-            _grp_df = df[df["employee"].isin(_grp_names)]
-
-            if {"first_name", "last_name"}.issubset(_grp_df.columns):
-                _grp_df = _grp_df.copy()
-                _grp_df["First Name"] = _grp_df["first_name"].astype(str).str.strip()
-                _grp_df["Last Name"] = _grp_df["last_name"].astype(str).str.strip()
-            else:
-                _grp_df = _grp_df.copy()
-                _name_split = _grp_df["employee"].astype(str).str.split(",", n=1, expand=True)
-                _grp_df["Last Name"] = _name_split[0].fillna("").str.strip()
-                _grp_df["First Name"] = _name_split[1].fillna("").str.strip()
-
-            _hours_agg = (
-                _grp_df.groupby(["First Name", "Last Name", "pto_type"], as_index=False)["hours"]
-                .sum()
-                .rename(columns={"pto_type": "PTO Type", "hours": "Total Hours"})
-            )
-
-            _days_df = _grp_df[["First Name", "Last Name", "pto_type", "start_date", "end_date"]].copy()
-            _days_df["impact_date"] = _days_df.apply(
-                lambda r: _weekday_date_range(r["start_date"], r["end_date"]),
-                axis=1,
-            )
-            _days_df = _days_df.explode("impact_date")
-            _days_agg = (
-                _days_df.groupby(["First Name", "Last Name", "pto_type"])["impact_date"]
-                .nunique()
-                .reset_index(name="Days Impacted")
-                .rename(columns={"pto_type": "PTO Type"})
-            )
-
-            _grp_agg = _hours_agg.merge(
-                _days_agg,
-                on=["First Name", "Last Name", "PTO Type"],
-                how="left",
-            )
-            _grp_agg["Total Hours"] = _grp_agg["Total Hours"].round(1)
-            _grp_agg["Days Impacted"] = _grp_agg["Days Impacted"].fillna(0).astype(int)
-            _grp_agg = _grp_agg.sort_values(
-                ["Total Hours", "Last Name", "First Name", "PTO Type"],
-                ascending=[False, True, True, True],
-            )
-            divider()
-            section_label(f"PTO Breakdown - {bar_label}")
-            st.dataframe(
-                _grp_agg[["First Name", "Last Name", "PTO Type", "Total Hours", "Days Impacted"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    hist_pts = hist_event.selection.get("points", []) if (hist_event and hist_event.selection) else []
-    if hist_pts:
-        bin_sel = hist_pts[0].get("x") or hist_pts[0].get("label") or ""
-        if bin_sel in _bin_labels:
-            bi = _bin_labels.index(bin_sel)
-            lo, hi = _bin_edges[bi], _bin_edges[bi + 1]
-            names_in_bin = set(_emp_hrs_b[(_emp_hrs_b["hours"] >= lo) & (_emp_hrs_b["hours"] <= hi)]["employee"])
-            if names_in_bin:
-                _hist_df = df[df["employee"].isin(names_in_bin)]
-                _hist_agg = (
-                    _hist_df.groupby(["employee", "building", "pto_type"])["hours"].sum()
-                    .reset_index()
-                    .rename(columns={"employee": "Employee", "building": "Building",
-                                     "pto_type": "PTO Type", "hours": "Hours"})
-                    .sort_values(["Employee", "Hours"], ascending=[True, False])
-                )
-                _hist_agg["Hours"] = _hist_agg["Hours"].round(1)
-                _hist_agg["Days"] = (_hist_agg["Hours"] / 8).round(1)
-                divider()
-                section_label(f"Employees Using {bin_sel} — by PTO Type")
-                st.dataframe(_hist_agg, use_container_width=True, hide_index=True)
 
     # ── Module 3: Burnout & Retention Risk ──────────────────────────────────
     divider()
@@ -4127,6 +3918,202 @@ def pto_page(conn, building: str) -> None:
             st.dataframe(low_users[["Employee", "Hours", "Days"]], use_container_width=True, hide_index=True)
         else:
             info_box("Not enough data for bottom 10% analysis.")
+
+    # ── Monday / Friday Absence Pattern ─────────────────────────────────────
+    divider()
+    section_header("Monday / Friday Absence Pattern")
+    _UNPLANNED_LOWER = {"personal", "absence", "absence (sick)", "absence (covid)", "long term sick leave"}
+    df_unplan = df[df["pto_type"].str.strip().str.lower().isin(_UNPLANNED_LOWER)].copy()
+    if df_unplan.empty:
+        info_box("No unplanned absence records in the selected period.")
+    else:
+        _pat_rows = []
+        for _, _row in df_unplan.iterrows():
+            for _d in _weekday_date_range(_row["start_date"], _row["end_date"]):
+                _pat_rows.append({
+                    "employee": _row["employee"],
+                    "building": _row["building"],
+                    "dow": pd.Timestamp(_d).dayofweek,
+                })
+        if _pat_rows:
+            _df_pat = pd.DataFrame(_pat_rows)
+            _pat_agg = (
+                _df_pat.groupby(["employee", "building"])
+                .agg(total_days=("dow", "count"), mon_fri=("dow", lambda x: x.isin([0, 4]).sum()))
+                .reset_index()
+            )
+            _pat_agg = _pat_agg[_pat_agg["total_days"] >= 3].copy()
+            _pat_agg["Mon/Fri %"] = (_pat_agg["mon_fri"] / _pat_agg["total_days"] * 100).round(0).astype(int)
+            _pat_agg = _pat_agg.sort_values("Mon/Fri %", ascending=False).rename(columns={
+                "employee": "Employee", "building": "Building",
+                "total_days": "Unplanned Days", "mon_fri": "Mon/Fri Days",
+            })
+            if _pat_agg.empty:
+                info_box("Not enough absence days per employee to detect patterns (minimum 3 days required).")
+            else:
+                st.dataframe(
+                    _pat_agg[["Employee", "Building", "Unplanned Days", "Mon/Fri Days", "Mon/Fri %"]],
+                    use_container_width=True, hide_index=True,
+                )
+        else:
+            info_box("No individual absence days to analyze.")
+
+    # ── Absence Frequency — Events vs. Hours ────────────────────────────────
+    divider()
+    section_header("Absence Frequency — Events vs. Hours")
+    if df_unplan.empty:
+        abs_agg = pd.DataFrame()
+        info_box("No unplanned absence records in the selected period.")
+    else:
+        abs_agg = (
+            df_unplan.groupby(["employee", "building"])
+            .agg(events=("hours", "count"), total_hours=("hours", "sum"))
+            .reset_index()
+        )
+        abs_agg["Avg Hrs / Event"] = (abs_agg["total_hours"] / abs_agg["events"]).round(1)
+        abs_agg["Days"] = (abs_agg["total_hours"] / 8).round(1)
+        abs_agg["Total Hours"] = abs_agg["total_hours"].round(1)
+        abs_agg = abs_agg.sort_values("events", ascending=False).rename(columns={
+            "employee": "Employee", "building": "Building", "events": "Events",
+        })
+        st.dataframe(
+            abs_agg[["Employee", "Building", "Events", "Total Hours", "Days", "Avg Hrs / Event"]],
+            use_container_width=True, hide_index=True,
+        )
+
+    # ── Absence × Attendance Points ──────────────────────────────────────────
+    divider()
+    section_header("Absence \u00d7 Attendance Points")
+    _pt_lookup = {int(e["employee_id"]): float(e.get("point_total") or 0) for e in active_db}
+    if not abs_agg.empty and "employee_id" in df_unplan.columns:
+        _id_map = df_unplan.groupby("employee")["employee_id"].first().to_dict()
+        _cross = abs_agg[["Employee", "Building", "Events", "Total Hours", "Days"]].copy()
+        _cross["_eid"] = _cross["Employee"].map(_id_map)
+        _cross["Point Total"] = _cross["_eid"].apply(
+            lambda eid: _pt_lookup.get(int(eid)) if pd.notna(eid) else None
+        )
+        _cross = _cross.dropna(subset=["Point Total"]).drop(columns=["_eid"])
+        _cross["Point Total"] = _cross["Point Total"].round(1)
+        _cross = _cross.sort_values("Point Total", ascending=False)
+        if not _cross.empty:
+            xc1, xc2 = st.columns([2, 1])
+            with xc1:
+                _sc_fig = go.Figure(go.Scatter(
+                    x=_cross["Total Hours"],
+                    y=_cross["Point Total"],
+                    mode="markers",
+                    marker=dict(
+                        size=10,
+                        color=_cross["Point Total"],
+                        colorscale=[[0, "#1a3a5c"], [0.5, "#7b61ff"], [1, "#ff6b6b"]],
+                        showscale=False,
+                        line=dict(color="#060d1f", width=1),
+                    ),
+                    text=_cross["Employee"],
+                    customdata=_cross[["Building", "Events", "Days"]].values,
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "Absence Hours: %{x:.0f}<br>"
+                        "Points: %{y:.1f}<br>"
+                        "Building: %{customdata[0]}<br>"
+                        "Events: %{customdata[1]}<br>"
+                        "Days: %{customdata[2]}<extra></extra>"
+                    ),
+                ))
+                _sc_fig.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
+                    xaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Absence Hours"),
+                    yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Attendance Points"),
+                    margin=dict(t=10, b=10, l=10, r=10),
+                )
+                st.plotly_chart(_sc_fig, use_container_width=True, key="pto_pts_scatter")
+            with xc2:
+                section_label("High Risk — Points \u2265 4.0")
+                _hi_risk = _cross[_cross["Point Total"] >= 4.0]
+                if not _hi_risk.empty:
+                    st.dataframe(
+                        _hi_risk[["Employee", "Point Total", "Events", "Days"]],
+                        use_container_width=True, hide_index=True,
+                    )
+                else:
+                    info_box("No employees with \u2265 4.0 points in this group.")
+        else:
+            info_box("Could not match absence records to employee point totals.")
+    else:
+        info_box("No absence data available for cross-reference.")
+
+    # ── Year-Over-Year Comparison ─────────────────────────────────────────────
+    divider()
+    section_header("Year-Over-Year Comparison")
+    try:
+        _prior_start = date(date_start.year - 1, date_start.month, date_start.day)
+        _prior_end   = date(date_end.year - 1,   date_end.month,   date_end.day)
+    except ValueError:
+        _prior_start = date_start.replace(year=date_start.year - 1)
+        _prior_end   = date_end.replace(year=date_end.year - 1)
+    df_prior = df_all[
+        (df_all["start_date"].dt.date <= _prior_end)
+        & (df_all["end_date"].dt.date >= _prior_start)
+    ].copy()
+    if sel_building != "All":
+        df_prior = df_prior[df_prior["building"] == sel_building]
+    if sel_types:
+        df_prior = df_prior[df_prior["pto_type"].isin(sel_types)]
+
+    _cur_hrs   = df["hours"].sum()
+    _prior_hrs = df_prior["hours"].sum() if not df_prior.empty else 0
+    _cur_emps  = df["employee"].nunique()
+    _prior_emps = df_prior["employee"].nunique() if not df_prior.empty else 0
+    _hrs_delta  = _cur_hrs - _prior_hrs
+    _hrs_delta_pct = (_hrs_delta / _prior_hrs * 100) if _prior_hrs else 0
+    _emps_delta = _cur_emps - _prior_emps
+
+    yy1, yy2, yy3 = st.columns(3)
+    with yy1:
+        _s = "+" if _hrs_delta >= 0 else ""
+        _pto_metric("Hours vs Prior Year", f"{_s}{_hrs_delta:,.0f} hrs",
+                    f"Current: {_cur_hrs:,.0f}  |  Prior: {_prior_hrs:,.0f}")
+    with yy2:
+        _s2 = "+" if _emps_delta >= 0 else ""
+        _pto_metric("Employees vs Prior Year", f"{_s2}{_emps_delta}",
+                    f"Current: {_cur_emps}  |  Prior: {_prior_emps}")
+    with yy3:
+        _arr = "▲" if _hrs_delta_pct > 0 else ("▼" if _hrs_delta_pct < 0 else "→")
+        _pto_metric("Usage Change", f"{_arr} {abs(_hrs_delta_pct):.0f}%", "hours year-over-year")
+
+    if not df_prior.empty:
+        _df_cur_mo  = df.copy()
+        _df_prior_mo = df_prior.copy()
+        _df_cur_mo["month"]   = _df_cur_mo["start_date"].dt.to_period("M").dt.to_timestamp()
+        _df_prior_mo["month"] = (
+            _df_prior_mo["start_date"].dt.to_period("M").dt.to_timestamp()
+            + pd.DateOffset(years=1)
+        )
+        _cur_monthly   = _df_cur_mo.groupby("month")["hours"].sum().reset_index().assign(period="Current")
+        _prior_monthly = _df_prior_mo.groupby("month")["hours"].sum().reset_index().assign(period="Prior Year")
+        _yoy = pd.concat([_cur_monthly, _prior_monthly])
+        _yoy_fig = go.Figure()
+        for _lbl, _clr in [("Current", "#00d4ff"), ("Prior Year", "#4a5568")]:
+            _sub = _yoy[_yoy["period"] == _lbl]
+            if not _sub.empty:
+                _yoy_fig.add_trace(go.Bar(
+                    x=_sub["month"], y=_sub["hours"], name=_lbl,
+                    marker=dict(color=_clr, line=dict(color="#060d1f", width=1)),
+                    hovertemplate=f"<b>{_lbl}</b><br>%{{x|%b %Y}}: %{{y:.0f}} hrs<extra></extra>",
+                ))
+        _yoy_fig.update_layout(
+            barmode="group",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
+            xaxis=dict(showgrid=False, color="#4a7fa5"),
+            yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Hours"),
+            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11, color="#4a7fa5")),
+            margin=dict(t=10, b=10, l=10, r=10),
+        )
+        st.plotly_chart(_yoy_fig, use_container_width=True, key="pto_yoy_bar")
+    else:
+        info_box(f"No PTO data found for the prior year period ({_prior_start} \u2013 {_prior_end}).")
 
     # ── Module 4: Pace & Seasonality ────────────────────────────────────────
     divider()
