@@ -5082,7 +5082,7 @@ def exports_page(conn, building: str) -> None:
                 )
         else:
             st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-            info_box("Choose a report type and date range, then click <b>Run Report</b>.")
+            info_box("Choose a report type and date range, then click Run Report.")
 
 
 # ── Maintenance / Run Operations ──────────────────────────────────────────────
