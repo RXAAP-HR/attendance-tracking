@@ -4331,16 +4331,23 @@ def pto_page(conn, building: str) -> None:
                     _mgr_to_emps.setdefault(_mgr, []).append(_name)
 
                 # Points accrued per manager in the date range (positive entries only)
-                _pts_rows = fetchall(
-                    conn,
+                # ISO string comparison works on both SQLite and PostgreSQL
+                _pts_sql = (
                     "SELECT ph.employee_id, e.last_name, e.first_name, ph.points "
                     "FROM points_history ph "
                     "JOIN employees e ON e.employee_id = ph.employee_id "
                     "WHERE ph.points > 0 "
-                    "  AND date(ph.point_date) >= date(?) "
-                    "  AND date(ph.point_date) <= date(?)",
-                    (date_start.isoformat(), date_end.isoformat()),
+                    "  AND ph.point_date >= ? "
+                    "  AND ph.point_date <= ?"
                 )
+                _pts_params: list = [date_start.isoformat(), date_end.isoformat()]
+                if sel_building != "All":
+                    _pts_sql += ' AND COALESCE(e."Location", \'\') = ?'
+                    _pts_params.append(sel_building)
+                try:
+                    _pts_rows = fetchall(conn, _pts_sql, tuple(_pts_params))
+                except Exception:
+                    _pts_rows = []
                 _mgr_points: dict[str, dict] = {}
                 for _pr in _pts_rows:
                     _eid  = int(_pr["employee_id"])

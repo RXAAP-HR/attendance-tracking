@@ -149,6 +149,19 @@ def generate_manager_pto_pdf(
     _PLANNED_TYPES_FB   = {"vacation", "floating holiday", "reward pto", "personal"}
     _UNPLANNED_TYPES_FB = {"absence", "absence (sick)", "absence (covid)", "long term sick leave"}
 
+    _PAID_LEAVE_TYPES    = {"vacation", "floating holiday", "reward pto", "personal",
+                            "bereavement", "jury duty"}
+    _UNPAID_ABSENCE_TYPES = {"absent", "absence", "absent (sick)", "absence (sick)",
+                             "absent (covid)", "absence (covid)", "long term sick leave"}
+
+    def _leave_group(pto_type: str) -> str:
+        tl = pto_type.strip().lower()
+        if tl in _PAID_LEAVE_TYPES:
+            return "Paid Leave"
+        if tl in _UNPAID_ABSENCE_TYPES:
+            return "Unplanned Absences"
+        return "Protected Leave"
+
     def _classify_pdf_row(row) -> str:
         tl = str(row.get("pto_type", "")).strip().lower()
         if tl in _PROTECTED:
@@ -176,7 +189,7 @@ def generate_manager_pto_pdf(
     except Exception:
         pass
 
-    story.append(Paragraph("PTO Usage Summary Report", s["report_title"]))
+    story.append(Paragraph("Attendance &amp; Leave Summary Report", s["report_title"]))
     story.append(Spacer(1, 0.05 * inch))
     story.append(Paragraph(f"Period: {period_str}", s["meta"]))
     if building != "All":
@@ -192,11 +205,11 @@ def generate_manager_pto_pdf(
     unplan_days = df[df["_category"] == "Unplanned"]["days"].sum()
 
     overview = [
-        ["Total PTO Hours",      f"{total_hrs:,.0f}"],
-        ["Total PTO Days",       f"{total_days:,.1f}"],
-        ["Employees Using PTO",  str(total_emps)],
-        ["Planned PTO Days",     f"{plan_days:,.1f}"],
-        ["Unplanned PTO Days",   f"{unplan_days:,.1f}"],
+        ["Total Leave Hours",            f"{total_hrs:,.0f}"],
+        ["Total Leave Days",             f"{total_days:,.1f}"],
+        ["Employees with Recorded Leave",str(total_emps)],
+        ["Paid Leave Days",              f"{plan_days:,.1f}"],
+        ["Unplanned Absence Days",       f"{unplan_days:,.1f}"],
     ]
     ov_tbl = Table(
         [[Paragraph(k, s["label"]), Paragraph(v, s["body"])] for k, v in overview],
@@ -232,23 +245,32 @@ def generate_manager_pto_pdf(
         ))
         story.append(Spacer(1, 0.1 * inch))
 
-        # PTO by type
+        # Leave by type — split into Paid Leave / Unplanned Absences / Protected Leave
         type_summary = (
             mgr_df.groupby("pto_type")
             .agg(hours=("hours", "sum"), days=("days", "sum"), events=("hours", "count"))
             .sort_values("days", ascending=False)
             .reset_index()
         )
-        story.append(Paragraph("PTO by Type", s["label"]))
-        story.append(Spacer(1, 0.04 * inch))
-        story.append(_data_table(
-            ["PTO Type", "Hours", "Avg Days / Request"],
-            [[r["pto_type"], f"{r['hours']:.0f}", f"{r['days'] / r['events']:.1f}"]
-             for _, r in type_summary.iterrows()],
-            [3.5, 1.25, 1.25],
-            s,
-        ))
-        story.append(Spacer(1, 0.15 * inch))
+        type_summary["_group"] = type_summary["pto_type"].apply(_leave_group)
+
+        _GROUP_ORDER = ["Paid Leave", "Unplanned Absences", "Protected Leave"]
+        for _grp in _GROUP_ORDER:
+            _grp_rows = type_summary[type_summary["_group"] == _grp]
+            if _grp_rows.empty:
+                continue
+            story.append(Paragraph(_grp, s["label"]))
+            story.append(Spacer(1, 0.04 * inch))
+            story.append(_data_table(
+                ["PTO Type", "Hours", "Avg Days / Request"],
+                [[r["pto_type"], f"{r['hours']:.0f}", f"{r['days'] / r['events']:.1f}"]
+                 for _, r in _grp_rows.iterrows()],
+                [3.5, 1.25, 1.25],
+                s,
+            ))
+            story.append(Spacer(1, 0.1 * inch))
+
+        story.append(Spacer(1, 0.05 * inch))
 
         # Employee breakdown — days respects PT/FT shift length
         emp_summary = (
