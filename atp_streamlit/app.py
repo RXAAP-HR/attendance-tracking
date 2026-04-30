@@ -4065,7 +4065,8 @@ def pto_page(conn, building: str) -> None:
     # ── Absence × Attendance Points ──────────────────────────────────────────
     divider()
     section_header("Absence \u00d7 Attendance Points")
-    _pt_lookup = {int(e["employee_id"]): float(e.get("point_total") or 0) for e in active_db}
+    _pt_rows = fetchall(conn, "SELECT employee_id, point_total FROM employees WHERE is_active = 1")
+    _pt_lookup = {int(r["employee_id"]): float(r["point_total"] or 0) for r in _pt_rows}
     if not abs_agg.empty and "employee_id" in df_unplan.columns:
         _id_map = df_unplan.groupby("employee")["employee_id"].first().to_dict()
         _cross = abs_agg[["Employee", "Building", "Events", "Total Hours", "Days"]].copy()
