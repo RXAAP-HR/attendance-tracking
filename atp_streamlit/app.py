@@ -4262,8 +4262,7 @@ def pto_page(conn, building: str) -> None:
         x=season["label"],
         y=season["hours"],
         marker=dict(
-            color=season["hours"],
-            colorscale=[[0, "#0d1b2e"], [0.5, "#7b61ff"], [1, "#00d4ff"]],
+            color="#2684F0",
             line=dict(color="#060d1f", width=1),
         ),
         text=season["days"].round(0).astype(int).astype(str) + "d",
