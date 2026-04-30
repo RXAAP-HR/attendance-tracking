@@ -3877,24 +3877,23 @@ def pto_page(conn, building: str) -> None:
     df_cls["category"] = df_cls["pto_type"].apply(_classify_pto)
     cat_hrs = df_cls.groupby("category")["hours"].sum()
     cat_days = df_cls.groupby("category")["days"].sum()
-    total_cls_h = cat_hrs.sum()
+    total_cls_d = cat_days.sum()
     plan_h = cat_hrs.get("Planned", 0)
     unpl_h = cat_hrs.get("Unplanned", 0)
-    prot_h = cat_hrs.get("Protected / Neutral", 0)
     plan_d = cat_days.get("Planned", 0)
     unpl_d = cat_days.get("Unplanned", 0)
     prot_d = cat_days.get("Protected / Neutral", 0)
 
     pv1, pv2, pv3, pv4 = st.columns(4)
-    _pct = lambda h: f"{h / total_cls_h * 100:.0f}%" if total_cls_h else "—"
+    _pct = lambda d: f"{d / total_cls_d * 100:.0f}%" if total_cls_d else "—"
     with pv1:
-        _pto_metric("Planned", _pct(plan_h), f"{plan_d:.1f} days")
+        _pto_metric("Planned", _pct(plan_d), f"{plan_d:.1f} days")
     with pv2:
-        _pto_metric("Unplanned", _pct(unpl_h), f"{unpl_d:.1f} days")
+        _pto_metric("Unplanned", _pct(unpl_d), f"{unpl_d:.1f} days")
     with pv3:
-        _pto_metric("Protected / Neutral", _pct(prot_h), f"{prot_d:.1f} days")
+        _pto_metric("Protected / Neutral", _pct(prot_d), f"{prot_d:.1f} days")
     with pv4:
-        ratio_str = f"{plan_h / unpl_h:.1f}×" if unpl_h else "N/A"
+        ratio_str = f"{plan_d / unpl_d:.1f}×" if unpl_d else "N/A"
         _pto_metric("Plan : Unplan Ratio", ratio_str, "higher = more predictable")
 
     df_cls["month"] = df_cls["start_date"].dt.to_period("M").dt.to_timestamp()
@@ -4040,9 +4039,9 @@ def pto_page(conn, building: str) -> None:
         else:
             info_box("No individual absence days to analyze.")
 
-    # ── Absence Frequency — Events vs. Hours ────────────────────────────────
+    # ── Absence Frequency — Events vs. Days ─────────────────────────────────
     divider()
-    section_header("Absence Frequency — Events vs. Hours")
+    section_header("Absence Frequency — Events vs. Days")
     if df_unplan.empty:
         abs_agg = pd.DataFrame()
         info_box("No unplanned absence records in the selected period.")
@@ -4052,14 +4051,14 @@ def pto_page(conn, building: str) -> None:
             .agg(events=("hours", "count"), total_hours=("hours", "sum"), total_days=("days", "sum"))
             .reset_index()
         )
-        abs_agg["Avg Hrs / Event"] = (abs_agg["total_hours"] / abs_agg["events"]).round(1)
+        abs_agg["Avg Days / Request"] = (abs_agg["total_days"] / abs_agg["events"]).round(1)
         abs_agg["Days"] = abs_agg["total_days"].round(1)
         abs_agg["Total Hours"] = abs_agg["total_hours"].round(1)
-        abs_agg = abs_agg.sort_values("events", ascending=False).rename(columns={
+        abs_agg = abs_agg.sort_values("total_days", ascending=False).rename(columns={
             "employee": "Employee", "building": "Building", "events": "Events",
         })
         st.dataframe(
-            abs_agg[["Employee", "Building", "Events", "Total Hours", "Days", "Avg Hrs / Event"]],
+            abs_agg[["Employee", "Building", "Events", "Total Hours", "Days", "Avg Days / Request"]],
             use_container_width=True, hide_index=True,
         )
 
@@ -4081,7 +4080,7 @@ def pto_page(conn, building: str) -> None:
             xc1, xc2 = st.columns([2, 1])
             with xc1:
                 _sc_fig = go.Figure(go.Scatter(
-                    x=_cross["Total Hours"],
+                    x=_cross["Days"],
                     y=_cross["Point Total"],
                     mode="markers",
                     marker=dict(
@@ -4092,20 +4091,20 @@ def pto_page(conn, building: str) -> None:
                         line=dict(color="#060d1f", width=1),
                     ),
                     text=_cross["Employee"],
-                    customdata=_cross[["Building", "Events", "Days"]].values,
+                    customdata=_cross[["Building", "Events", "Total Hours"]].values,
                     hovertemplate=(
                         "<b>%{text}</b><br>"
-                        "Absence Hours: %{x:.0f}<br>"
+                        "Absence Days: %{x:.1f}<br>"
                         "Points: %{y:.1f}<br>"
                         "Building: %{customdata[0]}<br>"
                         "Events: %{customdata[1]}<br>"
-                        "Days: %{customdata[2]}<extra></extra>"
+                        "Hours: %{customdata[2]:.0f}<extra></extra>"
                     ),
                 ))
                 _sc_fig.update_layout(
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
-                    xaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Absence Hours"),
+                    xaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Absence Days"),
                     yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5", title="Attendance Points"),
                     margin=dict(t=10, b=10, l=10, r=10),
                 )

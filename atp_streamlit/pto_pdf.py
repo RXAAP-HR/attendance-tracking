@@ -136,6 +136,10 @@ def generate_manager_pto_pdf(
     def _hours_to_days(emp_name: str, hrs: float) -> float:
         return round(hrs / shift_hours.get(emp_name, 8.0), 1)
 
+    df["days"] = df.apply(
+        lambda row: row["hours"] / shift_hours.get(row["employee"], 8.0), axis=1
+    )
+
     period_str = f"{date_start.strftime('%B %d, %Y')} \u2013 {date_end.strftime('%B %d, %Y')}"
     gen_date   = date.today().strftime("%B %d, %Y")
 
@@ -159,17 +163,19 @@ def generate_manager_pto_pdf(
     story.append(HRFlowable(width=BODY_W, thickness=0.5, color=_RULE, spaceAfter=8))
 
     total_hrs  = df["hours"].sum()
+    total_days = df["days"].sum()
     total_emps = df["employee"].nunique()
     _unplan = {"personal", "absence", "absence (sick)", "absence (covid)", "long term sick leave"}
     _plan   = {"vacation", "floating holiday", "reward pto"}
-    unplan_hrs = df[df["pto_type"].str.strip().str.lower().isin(_unplan)]["hours"].sum()
-    plan_hrs   = df[df["pto_type"].str.strip().str.lower().isin(_plan)]["hours"].sum()
+    unplan_days = df[df["pto_type"].str.strip().str.lower().isin(_unplan)]["days"].sum()
+    plan_days   = df[df["pto_type"].str.strip().str.lower().isin(_plan)]["days"].sum()
 
     overview = [
-        ["Total PTO Hours",    f"{total_hrs:,.0f}"],
-        ["Employees Using PTO", str(total_emps)],
-        ["Planned PTO Hours",  f"{plan_hrs:,.0f}"],
-        ["Unplanned PTO Hours", f"{unplan_hrs:,.0f}"],
+        ["Total PTO Hours",      f"{total_hrs:,.0f}"],
+        ["Total PTO Days",       f"{total_days:,.1f}"],
+        ["Employees Using PTO",  str(total_emps)],
+        ["Planned PTO Days",     f"{plan_days:,.1f}"],
+        ["Unplanned PTO Days",   f"{unplan_days:,.1f}"],
     ]
     ov_tbl = Table(
         [[Paragraph(k, s["label"]), Paragraph(v, s["body"])] for k, v in overview],
@@ -202,15 +208,15 @@ def generate_manager_pto_pdf(
         # PTO by type
         type_summary = (
             mgr_df.groupby("pto_type")
-            .agg(hours=("hours", "sum"), events=("hours", "count"))
-            .sort_values("hours", ascending=False)
+            .agg(hours=("hours", "sum"), days=("days", "sum"), events=("hours", "count"))
+            .sort_values("days", ascending=False)
             .reset_index()
         )
         story.append(Paragraph("PTO by Type", s["label"]))
         story.append(Spacer(1, 0.04 * inch))
         story.append(_data_table(
-            ["PTO Type", "Hours", "Avg Hrs / Request"],
-            [[r["pto_type"], f"{r['hours']:.0f}", f"{r['hours'] / r['events']:.1f}"]
+            ["PTO Type", "Hours", "Avg Days / Request"],
+            [[r["pto_type"], f"{r['hours']:.0f}", f"{r['days'] / r['events']:.1f}"]
              for _, r in type_summary.iterrows()],
             [3.5, 1.25, 1.25],
             s,
@@ -220,19 +226,19 @@ def generate_manager_pto_pdf(
         # Employee breakdown — days respects PT/FT shift length
         emp_summary = (
             mgr_df.groupby("employee")
-            .agg(hours=("hours", "sum"), events=("hours", "count"))
-            .sort_values("hours", ascending=False)
+            .agg(hours=("hours", "sum"), days=("days", "sum"), events=("hours", "count"))
+            .sort_values("days", ascending=False)
             .reset_index()
         )
         story.append(Paragraph("Employee Breakdown", s["label"]))
         story.append(Spacer(1, 0.04 * inch))
         story.append(_data_table(
-            ["Employee", "Hours", "Avg Hrs / Request"],
+            ["Employee", "Hours", "Avg Days / Request"],
             [
                 [
                     r["employee"],
                     f"{r['hours']:.0f}",
-                    f"{r['hours'] / r['events']:.1f}",
+                    f"{r['days'] / r['events']:.1f}",
                 ]
                 for _, r in emp_summary.iterrows()
             ],
