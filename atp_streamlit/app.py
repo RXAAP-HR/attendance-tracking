@@ -4933,39 +4933,36 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
         params = [start_date.isoformat(), end_date.isoformat()]
 
     elif export_type == "pending ytd roll-offs":
-        # Preview the next upcoming 1st-of-month roll-off (or today if it is the 1st)
-        _today = date.today()
-        if _today.day == 1:
-            _ytd_run_date = _today
-        elif _today.month == 12:
-            _ytd_run_date = date(_today.year + 1, 1, 1)
-        else:
-            _ytd_run_date = date(_today.year, _today.month + 1, 1)
-        pending = services.preview_ytd_rolloffs(conn, run_date=_ytd_run_date, exclude_applied=True)
         rows_out = []
-        for employee_id, net_points, roll_date, label in pending:
-            emp = repo.get_employee(conn, int(employee_id))
-            if not emp:
-                continue
-            emp = dict(emp)
-            loc = (emp.get("Location") or "")
-            if building != "All" and loc != building:
-                continue
-            current_total = round(float(emp.get("point_total", 0) or 0), 1)
-            if current_total <= 0.0:
-                continue
-            rolloff_pts = round(float(net_points), 1)
-            new_total = round(max(current_total - rolloff_pts, 0.0), 1)
-            rows_out.append({
-                "Employee ID": int(employee_id),
-                "First Name": emp.get("first_name", ""),
-                "Last Name": emp.get("last_name", ""),
-                "Points Rolling Off": rolloff_pts,
-                "New Point Total": new_total,
-                "Point Date": roll_date.isoformat(),
-                "Note": "YTD Roll Off",
-                "Notes": "",
-            })
+        cur = start_date.replace(day=1)
+        while cur <= end_date:
+            pending = services.preview_ytd_rolloffs(conn, run_date=cur, exclude_applied=True)
+            for employee_id, net_points, roll_date, label in pending:
+                emp = repo.get_employee(conn, int(employee_id))
+                if not emp:
+                    continue
+                emp = dict(emp)
+                loc = (emp.get("Location") or "")
+                if building != "All" and loc != building:
+                    continue
+                current_total = round(float(emp.get("point_total", 0) or 0), 1)
+                if current_total <= 0.0:
+                    continue
+                rolloff_pts = round(float(net_points), 1)
+                new_total = round(max(current_total - rolloff_pts, 0.0), 1)
+                rows_out.append({
+                    "Employee ID": int(employee_id),
+                    "First Name": emp.get("first_name", ""),
+                    "Last Name": emp.get("last_name", ""),
+                    "Points Rolling Off": rolloff_pts,
+                    "New Point Total": new_total,
+                    "Point Date": roll_date.isoformat(),
+                    "Note": "YTD Roll Off",
+                    "Notes": "",
+                })
+            next_y = cur.year + (1 if cur.month == 12 else 0)
+            next_m = 1 if cur.month == 12 else cur.month + 1
+            cur = date(next_y, next_m, 1)
         if rows_out:
             return pd.DataFrame(rows_out)
         return pd.DataFrame(columns=["Employee ID", "First Name", "Last Name", "Points Rolling Off", "New Point Total", "Point Date", "Note", "Notes"])
