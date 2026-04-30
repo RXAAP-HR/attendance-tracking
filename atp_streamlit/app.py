@@ -42,6 +42,7 @@ from atp_core.schema import ensure_schema
 from atp_core import repo, services
 from atp_core.rules import REASON_OPTIONS
 from atp_streamlit.ca_pdf import generate_ca_pdf
+from atp_streamlit.pto_pdf import generate_manager_pto_pdf
 
 BUILDINGS = ["APIM", "APIS", "AAP"]
 POINT_BALANCE_REPAIR_VERSION = 2
@@ -4214,6 +4215,61 @@ def pto_page(conn, building: str) -> None:
             if not drill_mon.empty:
                 divider()
                 _drill_table(drill_mon, f"PTO in {sel_mon_label}")
+
+    # ── Manager PTO Summary Report ───────────────────────────────────────────
+    divider()
+    section_label("Manager PTO Summary Report")
+    st.caption(
+        "Generate a per-manager PDF summarising PTO usage for the selected period "
+        "and filters — suitable for sharing with department heads."
+    )
+    _rpt_c1, _rpt_c2 = st.columns([1, 2])
+    with _rpt_c1:
+        if st.button("Generate Manager Report", use_container_width=True, key="gen_mgr_pto_pdf"):
+            with st.spinner("Generating PDF..."):
+                _mgr_rows = fetchall(conn,
+                    "SELECT employee_id, COALESCE(manager,'') AS manager, "
+                    "COALESCE(employment_type,'Full-Time') AS employment_type "
+                    "FROM employees WHERE is_active = 1"
+                )
+                _mgr_lookup: dict[int, str] = {
+                    int(r["employee_id"]): (r["manager"] or "Unassigned").strip() or "Unassigned"
+                    for r in _mgr_rows
+                }
+                _shift_hours: dict[str, float] = {}
+                for _r in _mgr_rows:
+                    _eid  = int(_r["employee_id"])
+                    _name = next(
+                        (f"{e['last_name'].strip()}, {e['first_name'].strip()}"
+                         for e in active_db if int(e["employee_id"]) == _eid),
+                        None,
+                    )
+                    if _name:
+                        _et = (_r.get("employment_type") or "Full-Time").strip().lower()
+                        _shift_hours[_name] = 4.0 if "part" in _et else 8.0
+                _mgr_to_emps: dict[str, list[str]] = {}
+                for _e in active_db:
+                    if sel_building != "All" and ((_e.get("location") or "")) != sel_building:
+                        continue
+                    _eid  = int(_e["employee_id"])
+                    _mgr  = _mgr_lookup.get(_eid, "Unassigned")
+                    _name = f"{_e['last_name'].strip()}, {_e['first_name'].strip()}"
+                    _mgr_to_emps.setdefault(_mgr, []).append(_name)
+                st.session_state["_mgr_pto_pdf"] = generate_manager_pto_pdf(
+                    df, _mgr_lookup, _mgr_to_emps, _shift_hours,
+                    date_start, date_end, sel_building,
+                )
+            st.toast("Manager report ready for download.")
+    with _rpt_c2:
+        if st.session_state.get("_mgr_pto_pdf"):
+            st.download_button(
+                "Download Manager PTO Report (PDF)",
+                data=st.session_state["_mgr_pto_pdf"],
+                file_name=f"PTO_Manager_Report_{date_start}_{date_end}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key="dl_mgr_pto_pdf",
+            )
 
     # ── Export ──────────────────────────────────────────────────────────────
     divider()
