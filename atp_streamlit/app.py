@@ -5138,21 +5138,23 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
                 rolloff_pts = round(float(net_points), 1)
                 new_total = round(max(current_total - rolloff_pts, 0.0), 1)
                 rows_out.append({
-                    "Employee ID": int(employee_id),
+                    "Employee #": int(employee_id),
                     "First Name": emp.get("first_name", ""),
                     "Last Name": emp.get("last_name", ""),
+                    "Location": loc,
+                    "Current Point Total": current_total,
                     "Points Rolling Off": rolloff_pts,
                     "New Point Total": new_total,
                     "Point Date": roll_date.isoformat(),
-                    "Note": "YTD Roll Off",
-                    "Notes": "",
+                    "Reason": "YTD Roll-Off",
+                    "Note": "",
                 })
             next_y = cur.year + (1 if cur.month == 12 else 0)
             next_m = 1 if cur.month == 12 else cur.month + 1
             cur = date(next_y, next_m, 1)
         if rows_out:
             return pd.DataFrame(rows_out)
-        return pd.DataFrame(columns=["Employee ID", "First Name", "Last Name", "Points Rolling Off", "New Point Total", "Point Date", "Note", "Notes"])
+        return pd.DataFrame(columns=["Employee #", "First Name", "Last Name", "Location", "Current Point Total", "Points Rolling Off", "New Point Total", "Point Date", "Reason", "Note"])
 
     else:  # applied ytd roll-off history
         year_start = date(date.today().year, 1, 1)
@@ -5198,8 +5200,25 @@ def run_export_query(conn, export_type: str, building: str, start_date: date, en
             "location": "Location",
             "point_total": "Current Point Total",
             "new_point_total": "New Point Total",
-            "rolloff_date": "2 Month Roll Off Date",
+            "rolloff_date": "Point Date",
         })
+        df["Points Rolling Off"] = (df["Current Point Total"] - df["New Point Total"]).round(1)
+        df["Reason"] = "2-Month Roll-Off"
+        df["Note"] = ""
+        df = df[["Employee #", "First Name", "Last Name", "Location", "Current Point Total", "Points Rolling Off", "New Point Total", "Point Date", "Reason", "Note"]]
+
+    if export_type == "upcoming perfect attendance" and not df.empty:
+        df = df.rename(columns={
+            "employee_id": "Employee #",
+            "first_name": "First Name",
+            "last_name": "Last Name",
+            "location": "Location",
+            "point_total": "Point Total",
+            "perfect_attendance": "Point Date",
+        })
+        df["Reason"] = "Perfect Attendance"
+        df["Note"] = ""
+        df = df[["Employee #", "First Name", "Last Name", "Location", "Point Total", "Point Date", "Reason", "Note"]]
 
     if export_type == "30-day point history" and not df.empty:
         if "Point" in df.columns:
