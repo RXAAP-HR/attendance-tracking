@@ -3718,24 +3718,32 @@ def pto_page(conn, building: str) -> None:
         )
 
     with trend_col:
-        section_header("Monthly PTO Trend (hours)")
+        _day_range = (date_end - date_start).days
+        _use_weekly = _day_range <= 90
+        _period = "W" if _use_weekly else "M"
+        _tick_fmt = "%b %d" if _use_weekly else "%b %Y"
+        _hover_fmt = "%b %d, %Y" if _use_weekly else "%b %Y"
+        _chart_title = "PTO Trend — Weekly (hours)" if _use_weekly else "PTO Trend — Monthly (hours)"
+        section_header(_chart_title)
+
         df_trend = df.copy()
-        df_trend["month"] = df_trend["start_date"].dt.to_period("M").dt.to_timestamp()
-        monthly = df_trend.groupby(["month", "pto_type"])["hours"].sum().reset_index()
+        df_trend["bucket"] = df_trend["start_date"].dt.to_period(_period).dt.to_timestamp()
+        bucketed = df_trend.groupby(["bucket", "pto_type"])["hours"].sum().reset_index()
+
         trend_fig = go.Figure()
-        for pto_type in monthly["pto_type"].unique():
-            sub = monthly[monthly["pto_type"] == pto_type]
-            trend_fig.add_trace(go.Scatter(
-                x=sub["month"], y=sub["hours"], name=pto_type, mode="lines+markers",
-                line=dict(color=type_colors.get(pto_type, "#00d4ff"), width=2),
-                marker=dict(size=5),
-                hovertemplate=f"<b>{pto_type}</b><br>%{{x|%b %Y}}: %{{y:.0f}} hrs<extra></extra>",
+        for pto_type in bucketed["pto_type"].unique():
+            sub = bucketed[bucketed["pto_type"] == pto_type]
+            trend_fig.add_trace(go.Bar(
+                x=sub["bucket"], y=sub["hours"], name=pto_type,
+                marker_color=type_colors.get(pto_type, "#00d4ff"),
+                hovertemplate=f"<b>{pto_type}</b><br>%{{x|{_hover_fmt}}}: %{{y:.0f}} hrs<extra></extra>",
             ))
         trend_fig.update_layout(
+            barmode="stack",
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#c8dff0", family="SF Mono, Fira Code, monospace"),
-            xaxis=dict(showgrid=False, color="#4a7fa5"),
+            xaxis=dict(showgrid=False, color="#4a7fa5", tickformat=_tick_fmt),
             yaxis=dict(showgrid=True, gridcolor="#0d1b2e", color="#4a7fa5"),
             legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11, color="#4a7fa5")),
             margin=dict(t=10, b=10, l=10, r=10),
