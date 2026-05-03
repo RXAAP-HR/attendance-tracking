@@ -332,7 +332,7 @@ div[data-testid="stRadio"] label:hover p {
 .stTabs [data-baseweb="tab"] {
     border-radius: 8px 8px 0 0; border: none !important;
     font-size: .82rem !important; font-weight: 600 !important;
-    letter-spacing: .035em !important; color: var(--muted) !important;
+    letter-spacing: .035em !important; color: var(--text) !important;
     padding: .52rem 1.05rem !important;
     transition: all .18s ease !important; background: transparent !important;
 }
@@ -449,7 +449,7 @@ p, label { color: var(--muted) !important; }
     text-shadow: 0 0 44px rgba(0,200,240,.22);
 }
 .page-heading p {
-    color: var(--muted); font-size: .82rem; margin: 0; letter-spacing: .01em;
+    color: #7eb3d8; font-size: .82rem; margin: 0; letter-spacing: .01em;
 }
 .accent-bar {
     width: 38px; height: 2px; border-radius: 99px; margin: .18rem 0 .32rem 0;
