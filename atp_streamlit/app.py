@@ -275,29 +275,34 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
 .stButton > button {
     border-radius: 7px !important; font-weight: 600 !important;
     font-size: .84rem !important; letter-spacing: .025em !important;
-    border: 1px solid rgba(0,150,255,.55) !important;
-    background: linear-gradient(135deg, rgba(0,80,200,.28) 0%, rgba(0,120,255,.18) 100%) !important;
-    color: #90d0ff !important;
+    border: 1px solid rgba(0,200,240,.70) !important;
+    background: linear-gradient(135deg, rgba(0,100,220,.55) 0%, rgba(0,60,180,.45) 100%) !important;
+    color: #00c8f0 !important;
+    text-shadow: 0 0 12px rgba(0,200,240,.50) !important;
+    box-shadow: 0 0 14px rgba(0,150,255,.18), inset 0 1px 0 rgba(255,255,255,.08) !important;
     transition: all .22s ease !important;
     position: relative; overflow: hidden;
 }
+.stButton > button p { color: #00c8f0 !important; }
 .stButton > button::before {
     content: '';
     position: absolute; inset: 0;
-    background: linear-gradient(135deg, rgba(0,200,240,.06) 0%, transparent 60%);
+    background: linear-gradient(135deg, rgba(0,200,240,.10) 0%, transparent 60%);
     opacity: 0; transition: opacity .22s ease;
 }
 .stButton > button:hover {
-    border-color: var(--cyan) !important;
-    background: rgba(0,120,255,.38) !important;
-    box-shadow: 0 0 20px rgba(0,120,255,.28), 0 0 40px rgba(0,120,255,.10),
-                inset 0 0 18px rgba(0,120,255,.08) !important;
-    color: #b8e8ff !important;
+    border-color: #00c8f0 !important;
+    background: linear-gradient(135deg, rgba(0,130,255,.70) 0%, rgba(0,80,220,.60) 100%) !important;
+    box-shadow: 0 0 28px rgba(0,200,240,.40), 0 0 56px rgba(0,120,255,.16),
+                inset 0 0 18px rgba(0,200,240,.10) !important;
+    color: #ffffff !important;
+    text-shadow: 0 0 16px rgba(0,220,255,.80) !important;
     transform: translateY(-1px) !important;
 }
+.stButton > button:hover p { color: #ffffff !important; }
 .stButton > button:active {
     transform: translateY(0) !important;
-    box-shadow: 0 0 10px rgba(0,120,255,.22) !important;
+    box-shadow: 0 0 12px rgba(0,200,240,.28) !important;
 }
 
 /* ══════════════════════════════════════════════════════════════
