@@ -6351,57 +6351,7 @@ def main() -> None:
     apply_theme()
     ensure_session_defaults()
 
-    _first_load = not st.session_state.get("_app_initialized", False)
-    _loading_slot = st.empty()
-
-    if _first_load:
-        _logo_path = REPO_ROOT / "assets" / "logo.png"
-        _logo_tag = ""
-        if _logo_path.exists():
-            _logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode()
-            _logo_tag = (
-                f'<img src="data:image/png;base64,{_logo_b64}"'
-                ' style="max-height:90px;max-width:180px;object-fit:contain;'
-                'margin-bottom:1.6rem;" />'
-            )
-        _loading_slot.html(
-            "<style>"
-            ".atp-loader{position:fixed;inset:0;z-index:9999;background:#02060e;"
-            "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0}"
-            ".atp-loader-tag{font-family:'Space Mono',monospace;font-size:.60rem;font-weight:700;"
-            "letter-spacing:.20em;text-transform:uppercase;color:#00c8f0;margin-bottom:.6rem;"
-            "text-shadow:0 0 14px rgba(0,200,240,.40)}"
-            ".atp-loader-title{font-family:'Space Grotesk',sans-serif;font-size:1.2rem;font-weight:700;"
-            "color:#d8ecff;letter-spacing:-.015em;margin-bottom:.5rem}"
-            ".atp-loader-sub{font-family:'Space Mono',monospace;font-size:.68rem;color:#3d5a7a;"
-            "letter-spacing:.10em;text-transform:uppercase;margin-bottom:2rem}"
-            ".atp-loader-track{width:260px;height:3px;background:rgba(0,120,255,.12);"
-            "border-radius:99px;overflow:hidden}"
-            ".atp-loader-fill{height:100%;border-radius:99px;"
-            "background:linear-gradient(90deg,#0050c8,#00c8f0);"
-            "box-shadow:0 0 12px rgba(0,200,240,.60);"
-            "animation:atp-load 35s cubic-bezier(.08,.5,.18,1) forwards}"
-            "@keyframes atp-load{0%{width:0%}8%{width:30%}25%{width:52%}"
-            "50%{width:68%}75%{width:78%}100%{width:87%}}"
-            ".atp-loader-dot{width:6px;height:6px;border-radius:50%;background:#00e896;"
-            "box-shadow:0 0 8px rgba(0,232,150,.70);margin-bottom:1.2rem;"
-            "animation:atp-dot-pulse 1.8s ease-in-out infinite}"
-            "@keyframes atp-dot-pulse{0%,100%{box-shadow:0 0 5px rgba(0,232,150,.60)}"
-            "50%{box-shadow:0 0 14px rgba(0,232,150,.90)}}"
-            "</style>"
-            f'<div class="atp-loader">'
-            f'{_logo_tag}'
-            '<div class="atp-loader-dot"></div>'
-            '<div class="atp-loader-tag">Attendance Point Tracker</div>'
-            '<div class="atp-loader-title">Loading System</div>'
-            '<div class="atp-loader-sub">Initializing database&hellip;</div>'
-            '<div class="atp-loader-track"><div class="atp-loader-fill"></div></div>'
-            "</div>"
-        )
-
     conn = get_conn()
-    st.session_state["_app_initialized"] = True
-    _loading_slot.empty()
 
     # Resolve any deferred navigation request (e.g. from spotlight button)
     # Must happen before the radio widget renders so the new value is respected.
