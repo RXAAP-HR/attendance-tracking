@@ -4945,6 +4945,21 @@ def manage_employees_page(conn) -> None:
                 unsafe_allow_html=True,
             )
             st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
+
+            _del_pdf_hist = [dict(r) for r in repo.get_points_history(conn, sel[0], limit=5000)]
+            _del_pdf_bytes = build_point_history_pdf(emp, _del_pdf_hist)
+            _del_safe_last = str(emp.get("last_name") or "employee").replace(" ", "_")
+            _del_safe_first = str(emp.get("first_name") or "").replace(" ", "_")
+            st.download_button(
+                "Download Point History PDF",
+                data=_del_pdf_bytes,
+                file_name=f"Points_History_{_del_safe_last}_{_del_safe_first}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"del_pdf_{sel[0]}",
+            )
+            st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+
             confirmed = st.checkbox(f"I understand — permanently delete #{sel[0]}")
             if confirmed:
                 if st.button("Delete Employee", key="del_emp"):
