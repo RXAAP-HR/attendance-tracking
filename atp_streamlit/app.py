@@ -4774,6 +4774,10 @@ def points_ledger_page(conn, building: str) -> None:
 
 def manage_employees_page(conn) -> None:
     page_heading("Manage Employees", "Onboard new employees, update details, archive, or permanently delete records.")
+    st.markdown(
+        "<style>div[data-testid='stWidgetLabel'] p, div[data-testid='stWidgetLabel'] label { color: #b8d0ee !important; }</style>",
+        unsafe_allow_html=True,
+    )
 
     BLDG_OPTS = ["", *BUILDINGS]
     tab_add, tab_edit = st.tabs(["Add Employee", "Edit / Archive / Delete"])
