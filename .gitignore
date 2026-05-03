@@ -9,7 +9,7 @@ build/
 .env
 .venv/
 venv/
-.streamlit/
+.streamlit/secrets.toml
 backend/.venv/
 frontend/node_modules/
 frontend/.next/
