@@ -874,7 +874,7 @@ def _initialize_database(db_key: str, repair_version: int) -> None:
 
 @st.cache_data(ttl=EMPLOYEE_CACHE_TTL_SECONDS, show_spinner=False)
 def _load_employees_cached(db_key: str, q: str, building: str) -> list[dict]:
-    conn = _get_cached_conn(db_key)
+    conn = _ensure_conn(db_key)
     rows = [dict(r) for r in repo.search_employees(conn, q=q, limit=3000)]
     if building != "All":
         rows = [r for r in rows if (r.get("location") or "") == building]
@@ -883,7 +883,7 @@ def _load_employees_cached(db_key: str, q: str, building: str) -> list[dict]:
 
 @st.cache_data(ttl=DASHBOARD_CACHE_TTL_SECONDS, show_spinner=False)
 def _fetchall_cached(db_key: str, sql: str, params: tuple = ()) -> list[dict]:
-    conn = _get_cached_conn(db_key)
+    conn = _ensure_conn(db_key)
     return [dict(r) for r in fetchall(conn, sql, params)]
 
 
@@ -892,10 +892,29 @@ def clear_read_caches() -> None:
     _fetchall_cached.clear()
 
 
+def _ensure_conn(db_key: str):
+    """Return a live connection, clearing the cache and reconnecting if the server dropped it."""
+    conn = _get_cached_conn(db_key)
+    if not is_pg(conn):
+        return conn
+    # psycopg2 sets conn.closed > 0 once it knows the socket is gone
+    if getattr(conn, 'closed', 0):
+        _get_cached_conn.clear()
+        return _get_cached_conn(db_key)
+    # Lightweight ping to catch connections the server closed without notice
+    try:
+        c = conn.cursor()
+        c.close()
+    except Exception:
+        _get_cached_conn.clear()
+        return _get_cached_conn(db_key)
+    return conn
+
+
 def get_conn():
     db_key = _db_cache_key()
     _initialize_database(db_key, POINT_BALANCE_REPAIR_VERSION)
-    return _get_cached_conn(db_key)
+    return _ensure_conn(db_key)
 
 def is_pg(conn) -> bool:
     return conn.__class__.__module__.startswith("psycopg2")
