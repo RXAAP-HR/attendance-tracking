@@ -3672,6 +3672,67 @@ def pto_page(conn, building: str) -> None:
     with k3:
         _pto_metric("Avg Days / Employee", f"{avg_days:.1f}", f"{avg_hours:.0f} hrs avg")
 
+    # ── Hours breakdown: Total / Pre-Planned / Unplanned / Protected ────────
+    _SUM_PROTECTED = {"jury duty", "bereavement", "fmla", "long term sick leave"}
+
+    def _sum_classify(row) -> str:
+        tl = str(row["pto_type"]).strip().lower()
+        if tl in _SUM_PROTECTED:
+            return "Protected"
+        rd = row.get("request_date")
+        sd = row.get("start_date")
+        if pd.notna(rd) and pd.notna(sd):
+            return "Pre-Planned" if rd < sd else "Unplanned"
+        if tl in {"vacation", "floating holiday", "reward pto", "personal"}:
+            return "Pre-Planned"
+        if tl in {"absence", "absence (sick)", "absence (covid)"}:
+            return "Unplanned"
+        return "Unplanned"
+
+    df["_sum_class"] = df.apply(_sum_classify, axis=1)
+    _total_hrs     = df["hours"].sum()
+    _planned_hrs   = df[df["_sum_class"] == "Pre-Planned"]["hours"].sum()
+    _unplanned_hrs = df[df["_sum_class"] == "Unplanned"]["hours"].sum()
+    _protected_hrs = df[df["_sum_class"] == "Protected"]["hours"].sum()
+
+    hc1, hc2, hc3, hc4 = st.columns(4)
+    with hc1:
+        _pto_metric("Total Hours", f"{_total_hrs:.0f}", f"{_total_hrs/8:.1f} days")
+    with hc2:
+        _pto_metric("Pre-Planned", f"{_planned_hrs:.0f}", f"{_planned_hrs/8:.1f} days")
+    with hc3:
+        _pto_metric("Unplanned", f"{_unplanned_hrs:.0f}", f"{_unplanned_hrs/8:.1f} days")
+    with hc4:
+        _pto_metric("Protected", f"{_protected_hrs:.0f}", f"{_protected_hrs/8:.1f} days")
+
+    st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+
+    # Bar chart by PTO type (same colors as rest of page)
+    _bar_totals = df.groupby("pto_type")["hours"].sum().sort_values(ascending=False).reset_index()
+    _bar_colors_map = {t: _PTO_TYPE_COLORS.get(t, _PTO_PALETTE[i % len(_PTO_PALETTE)])
+                       for i, t in enumerate(_bar_totals["pto_type"])}
+    _bar_fig = go.Figure()
+    for _, _brow in _bar_totals.iterrows():
+        _bar_fig.add_trace(go.Bar(
+            x=[_brow["pto_type"]],
+            y=[_brow["hours"]],
+            name=_brow["pto_type"],
+            marker_color=_bar_colors_map.get(_brow["pto_type"], "#00d4ff"),
+            hovertemplate=f"<b>{_brow['pto_type']}</b>: %{{y:.0f}} hrs<extra></extra>",
+        ))
+    _bar_fig.update_layout(
+        showlegend=False,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=270,
+        yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color="#7899c8", title="Hours"),
+        xaxis=dict(color="#7899c8"),
+        font=dict(color="#c8dff5"),
+        bargap=0.35,
+    )
+    st.plotly_chart(_bar_fig, use_container_width=True, key="pto_summary_bar")
+
     # ── Donut chart + Monthly trend ─────────────────────────────────────────
     divider()
     chart_col, trend_col = st.columns(2)
