@@ -6672,11 +6672,21 @@ def build_manager_report_pdf(
 
         _pto_classified = pto_df.copy()
         _pto_classified["_cls"] = _pto_classified.apply(_pdf_classify, axis=1)
+        # Normalize each row's hours to equiv days based on employment type
+        _pto_classified["_equiv_days"] = _pto_classified.apply(
+            lambda r: float(r["hours"]) / _mgr_hours_per_day(emp_type_map.get(int(r["employee_id"]), "Full-Time")),
+            axis=1,
+        )
         _total_h    = _pto_classified["hours"].sum()
         _planned_h  = _pto_classified[_pto_classified["_cls"] == "Pre-Planned"]["hours"].sum()
         _unplan_h   = _pto_classified[_pto_classified["_cls"] == "Unplanned"]["hours"].sum()
         _protect_h  = _pto_classified[_pto_classified["_cls"] == "Protected"]["hours"].sum()
+        _total_d    = _pto_classified["_equiv_days"].sum()
+        _planned_d  = _pto_classified[_pto_classified["_cls"] == "Pre-Planned"]["_equiv_days"].sum()
+        _unplan_d   = _pto_classified[_pto_classified["_cls"] == "Unplanned"]["_equiv_days"].sum()
+        _protect_d  = _pto_classified[_pto_classified["_cls"] == "Protected"]["_equiv_days"].sum()
 
+        _day_sub_s = S("MBkSub", fontName="Helvetica", fontSize=8, textColor=C_MUTED)
         breakdown_data = [
             [Paragraph("TOTAL HOURS", lbl_s), Paragraph("PRE-PLANNED", lbl_s),
              Paragraph("UNPLANNED", lbl_s),   Paragraph("PROTECTED", lbl_s)],
@@ -6684,10 +6694,10 @@ def build_manager_report_pdf(
              Paragraph(f"{_planned_h:.0f} hrs", val_s),
              Paragraph(f"{_unplan_h:.0f} hrs", val_s),
              Paragraph(f"{_protect_h:.0f} hrs", val_s)],
-            [Paragraph(f"{_total_h/8:.1f} days", S("MBkSub", fontName="Helvetica", fontSize=8, textColor=C_MUTED)),
-             Paragraph(f"{_planned_h/8:.1f} days", S("MBkSub2", fontName="Helvetica", fontSize=8, textColor=C_MUTED)),
-             Paragraph(f"{_unplan_h/8:.1f} days", S("MBkSub3", fontName="Helvetica", fontSize=8, textColor=C_MUTED)),
-             Paragraph(f"{_protect_h/8:.1f} days", S("MBkSub4", fontName="Helvetica", fontSize=8, textColor=C_MUTED))],
+            [Paragraph(f"{_total_d:.1f} equiv days", _day_sub_s),
+             Paragraph(f"{_planned_d:.1f} equiv days", _day_sub_s),
+             Paragraph(f"{_unplan_d:.1f} equiv days", _day_sub_s),
+             Paragraph(f"{_protect_d:.1f} equiv days", _day_sub_s)],
         ]
         bk_t = Table(breakdown_data, colWidths=[CW / 4] * 4)
         bk_t.setStyle(TableStyle([
