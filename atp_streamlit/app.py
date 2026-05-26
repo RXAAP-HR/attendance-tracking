@@ -6056,7 +6056,7 @@ def corrective_action_page(conn, building: str) -> None:
                        SELECT COALESCE(SUM(ph4.points), 0.0)
                          FROM points_history ph4
                         WHERE ph4.employee_id = e.employee_id
-                          AND ph4.point_date::date <= e.point_warning_date::date
+                          AND ph4.point_date::date <= NULLIF(e.point_warning_date, '')::date
                    ) AS points_at_warning,
                    (
                        SELECT (DATE_TRUNC('month', MIN(ph5.point_date::date)::timestamp)::date
@@ -6077,7 +6077,7 @@ def corrective_action_page(conn, building: str) -> None:
                        COALESCE(e.point_total, 0.0) >= 2.0
                        AND e.start_date IS NOT NULL
                        AND e.start_date ~ '^[0-9]{{4}}-[0-9]{{1,2}}-[0-9]{{1,2}}'
-                       AND (CURRENT_DATE - e.start_date::date) <= 60
+                       AND (CURRENT_DATE - NULLIF(e.start_date, '')::date) <= 60
                    )
                )
              ORDER BY COALESCE(e.point_total, 0.0) DESC,
