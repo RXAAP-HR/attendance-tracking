@@ -6076,7 +6076,7 @@ def corrective_action_page(conn, building: str) -> None:
                    OR (
                        COALESCE(e.point_total, 0.0) >= 2.0
                        AND e.start_date IS NOT NULL
-                       AND e.start_date <> ''
+                       AND e.start_date ~ '^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}'
                        AND (CURRENT_DATE - e.start_date::date) <= 60
                    )
                )
