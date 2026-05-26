@@ -6517,9 +6517,8 @@ def corrective_action_page(conn, building: str) -> None:
                 if show_actions:
                     bcol1, bcol2, _ = st.columns([1, 1, 3])
                     with bcol1:
-                        pdf_tier_key = "verbal_coaching" if key == "new_hire_coaching" else key
                         pdf_bytes = generate_ca_pdf(
-                            tier_key=pdf_tier_key,
+                            tier_key=key,
                             employee_name=f"{row['first_name']} {row['last_name']}",
                             manager=row.get("manager") or "",
                             gen_date=today.strftime("%m/%d/%Y"),

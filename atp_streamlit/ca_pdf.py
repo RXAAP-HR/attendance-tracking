@@ -21,10 +21,11 @@ MARGIN = inch
 BODY_W = PAGE_W - 2 * MARGIN
 
 TIER_LABELS = {
-    "verbal_coaching":  "Coaching Session",
-    "verbal_warning":   "Verbal Warning",
-    "written_warning":  "Written Warning",
-    "termination":      "Termination",
+    "verbal_coaching":    "Coaching Session",
+    "verbal_warning":     "Verbal Warning",
+    "written_warning":    "Written Warning",
+    "termination":        "Termination",
+    "new_hire_coaching":  "New Hire Coaching Session",
 }
 
 
@@ -133,6 +134,45 @@ def _body_standard(s, gen_date, point_total, rolloff_2m, rolloff_ytd):
         "valuable employee; therefore, we hope you will resolve this problem immediately so we will "
         "not have to take any further action. We do understand that absence and tardiness is "
         "sometimes unavoidable.",
+        s["body"],
+    ))
+    elems.append(Paragraph(
+        f"Please remember, it is possible to reverse points. Going 2 full consecutive months "
+        f"without any tardies or absences will remove 1.0 point. Your first opportunity for this "
+        f"roll off is on <b>{r2m}</b>. Points also fall off after one calendar year. "
+        f"Your next year-to-date roll off is <b>{rytd}</b>.",
+        s["body"],
+    ))
+    elems.append(Paragraph(
+        "Please feel free to discuss with your supervisor or the Human Resources department any "
+        "problems or questions you may have regarding the attendance program. API is committed to "
+        "maintaining a fair, consistent, reasonable, and flexible program.",
+        s["body"],
+    ))
+    return elems
+
+
+def _body_new_hire(s, gen_date, point_total, rolloff_2m, rolloff_ytd):
+    pts = f"{point_total:.1f}"
+    r2m  = rolloff_2m  or "—"
+    rytd = rolloff_ytd or "—"
+    elems = []
+    elems.append(Paragraph(
+        f"As of {gen_date}, your point total is <b>{pts}</b>.",
+        s["body"],
+    ))
+    elems.append(Paragraph(
+        "As a new team member, you are expected to be here each day to learn all the essential "
+        "parts of your new role. To set proper expectations, employees in their first 60 days of "
+        "employment may not exceed 2.0 points. Exceeding 2.0 points will lead to disciplinary "
+        "action, up to and including termination of employment.",
+        s["body"],
+    ))
+    elems.append(Paragraph(
+        "We are taking the appropriate step to address this concern. We feel that you are a "
+        "valuable new team member; therefore, we hope you will resolve this problem immediately "
+        "so we will not have to take any further action. We do understand that absence and "
+        "tardiness is sometimes unavoidable.",
         s["body"],
     ))
     elems.append(Paragraph(
@@ -294,6 +334,8 @@ def generate_ca_pdf(
 
     if tier_key == "termination":
         story.extend(_body_termination(s, gen_date, point_total, point_history))
+    elif tier_key == "new_hire_coaching":
+        story.extend(_body_new_hire(s, gen_date, point_total, rolloff_2m, rolloff_ytd))
     else:
         story.extend(_body_standard(s, gen_date, point_total, rolloff_2m, rolloff_ytd))
 
