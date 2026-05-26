@@ -6076,7 +6076,7 @@ def corrective_action_page(conn, building: str) -> None:
                    OR (
                        COALESCE(e.point_total, 0.0) >= 2.0
                        AND e.start_date IS NOT NULL
-                       AND e.start_date ~ '^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}'
+                       AND e.start_date ~ '^[0-9]{{4}}-[0-9]{{1,2}}-[0-9]{{1,2}}'
                        AND (CURRENT_DATE - e.start_date::date) <= 60
                    )
                )
@@ -6086,7 +6086,7 @@ def corrective_action_page(conn, building: str) -> None:
     else:
         sql_ca = f"""
             SELECT employee_id, last_name, first_name, building, point_total,
-                   manager, rolloff_date, last_point_date, point_warning_date,
+                   manager, rolloff_date, start_date, last_point_date, point_warning_date,
                    points_at_warning, next_ytd_rolloff
               FROM (
                 SELECT e.employee_id, e.last_name, e.first_name,
@@ -6165,10 +6165,19 @@ def corrective_action_page(conn, building: str) -> None:
     def parse_iso_date(value):
         if not value:
             return None
+        s = str(value).strip()
         try:
-            return date.fromisoformat(str(value)[:10])
+            return date.fromisoformat(s[:10])
         except Exception:
-            return None
+            pass
+        # Fallback: handle non-padded YYYY-M-D (date.fromisoformat is strict in Python < 3.11)
+        try:
+            parts = s.split("T")[0].split("-")
+            if len(parts) == 3:
+                return date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except Exception:
+            pass
+        return None
 
     def is_new_hire(row: dict) -> bool:
         sd = parse_iso_date(row.get("start_date"))
@@ -6585,7 +6594,7 @@ def corrective_action_page(conn, building: str) -> None:
             "Point Total":        f"{float(r.get('point_total') or 0):.1f}",
             "Last Point Date":    fmt_date(r.get("last_point_date")),
             "Point Warning Date": fmt_date(r.get("point_warning_date")),
-            "Tier":               tier_for(float(r.get("point_total") or 0))[1],
+            "Tier":               tier_for(float(r.get("point_total") or 0), is_new_hire(r))[1],
             "Status":             "Needs Warning" if needs_new_warning(r) else "Warning Up To Date",
         }
         for r in ca_rows
