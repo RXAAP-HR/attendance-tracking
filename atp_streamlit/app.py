@@ -993,6 +993,8 @@ def _apply_bulk_employee_override(
     update_manager: bool = False,
     employment_type: str | None = None,
     update_employment_type: bool = False,
+    start_date: date | None = None,
+    update_start_date: bool = False,
     note: str | None = None,
 ) -> None:
     employee_id = int(employee_id)
@@ -1041,6 +1043,13 @@ def _apply_bulk_employee_override(
                 conn,
                 "UPDATE employees SET employment_type = ? WHERE employee_id = ?",
                 (employment_type or "Full-Time", employee_id),
+            )
+
+        if update_start_date:
+            exec_sql(
+                conn,
+                "UPDATE employees SET start_date = ? WHERE employee_id = ?",
+                (start_date.isoformat() if start_date else None, employee_id),
             )
 
 
@@ -3323,10 +3332,10 @@ _PTO_TYPE_COLORS = {
 }
 
 _BULK_OVERRIDE_TEMPLATE_CSV = (
-    "Employee #,Point Total,2 Month Roll Off Date,Perfect Attendance Date,Manager,Status\n"
-    "1001,3.5,05/01/2025,03/01/2025,Smith John,Full-Time\n"
-    "1002,6.0,,,Jones Mary,Part-Time\n"
-    "1003,,04/01/2025,,,\n"
+    "Employee #,Point Total,2 Month Roll Off Date,Perfect Attendance Date,Manager,Status,Hire Date\n"
+    "1001,3.5,05/01/2025,03/01/2025,Smith John,Full-Time,01/15/2024\n"
+    "1002,6.0,,,Jones Mary,Part-Time,03/22/2023\n"
+    "1003,,04/01/2025,,,,\n"
 )
 
 _PTO_SAMPLE_CSV = (
@@ -5548,12 +5557,64 @@ def maintenance_page(conn) -> None:
             st.caption("The corrected point totals and date overrides are now saved in the tracker.")
     section_label("Bulk Employee Override")
     st.caption("Upload a CSV with corrected employee data. Required column: **Employee #**. "
-               "Optional columns: **Point Total**, **2 Month Roll Off Date**, **Perfect Attendance Date**, **Manager**, **Status**. "
+               "Optional columns: **Point Total**, **2 Month Roll Off Date**, **Perfect Attendance Date**, **Manager**, **Status**, **Hire Date**. "
                "Point adjustments are inserted as history entries; dates, manager, and status are set directly.")
+
+    _bo_export_col1, _bo_export_col2 = st.columns(2)
+    with _bo_export_col1:
+        _emp_export_rows = fetchall(
+            conn,
+            """
+            SELECT employee_id, last_name, first_name,
+                   COALESCE(point_total, 0.0) AS point_total,
+                   rolloff_date, perfect_attendance,
+                   COALESCE(manager, '') AS manager,
+                   COALESCE(employment_type, 'Full-Time') AS employment_type,
+                   start_date
+            FROM employees
+            WHERE COALESCE(is_active, 1) = 1
+            ORDER BY lower(last_name), lower(first_name)
+            """,
+        )
+
+        def _fmt_d(raw):
+            if not raw:
+                return ""
+            try:
+                return date.fromisoformat(str(raw)[:10]).strftime("%m/%d/%Y")
+            except Exception:
+                return ""
+
+        _export_rows = [
+            {
+                "Employee #": int(r["employee_id"]),
+                "Last Name": r["last_name"],
+                "First Name": r["first_name"],
+                "Point Total": round(float(r["point_total"] or 0), 1),
+                "2 Month Roll Off Date": _fmt_d(r["rolloff_date"]),
+                "Perfect Attendance Date": _fmt_d(r["perfect_attendance"]),
+                "Manager": r["manager"],
+                "Status": r["employment_type"],
+                "Hire Date": _fmt_d(r["start_date"]),
+            }
+            for r in _emp_export_rows
+        ]
+        _export_csv = pd.DataFrame(_export_rows).to_csv(index=False)
+        st.download_button(
+            "Download current employee data",
+            data=_export_csv,
+            file_name=f"employee_data_{date.today().isoformat()}.csv",
+            mime="text/csv",
+            key="btn_emp_data_export",
+            use_container_width=True,
+        )
+    with _bo_export_col2:
+        st.caption("Download a pre-filled CSV of all active employees. Edit values and re-upload below — only changed rows will be updated.")
+
     _bo_col_up, _bo_col_dl = st.columns([3, 1])
     with _bo_col_dl:
         st.download_button(
-            "Download template",
+            "Download blank template",
             data=_BULK_OVERRIDE_TEMPLATE_CSV,
             file_name="bulk_override_template.csv",
             mime="text/csv",
@@ -5597,10 +5658,11 @@ def maintenance_page(conn) -> None:
                     has_perfect = "Perfect Attendance Date" in csv_df.columns
                     has_manager = "Manager" in csv_df.columns
                     has_status = "Status" in csv_df.columns
-                    if not (has_points or has_rolloff or has_perfect or has_manager or has_status):
+                    has_hire_date = "Hire Date" in csv_df.columns
+                    if not (has_points or has_rolloff or has_perfect or has_manager or has_status or has_hire_date):
                         st.session_state["bulk_override_parse_error"] = (
                             "CSV must contain at least one of: 'Point Total', '2 Month Roll Off Date', "
-                            "'Perfect Attendance Date', 'Manager', 'Status'."
+                            "'Perfect Attendance Date', 'Manager', 'Status', 'Hire Date'."
                         )
                     else:
                         changes = []
@@ -5698,6 +5760,21 @@ def maintenance_page(conn) -> None:
                                 if new_status != cur_status:
                                     changed = True
 
+                            if has_hire_date:
+                                try:
+                                    new_hd = _parse_bulk_override_date(row["Hire Date"], "Hire Date")
+                                except ValueError as exc:
+                                    row_errors.append(f"Row {_ + 2}: {exc}")
+                                    continue
+
+                                cur_hd_raw = emp.get("start_date")
+                                cur_hd = date.fromisoformat(str(cur_hd_raw)[:10]) if cur_hd_raw else None
+                                change["Current Hire Date"] = str(cur_hd) if cur_hd else ""
+                                change["New Hire Date"] = str(new_hd) if new_hd else ""
+                                change["_update_hire_date"] = new_hd != cur_hd
+                                if new_hd != cur_hd:
+                                    changed = True
+
                             if changed:
                                 changes.append(change)
 
@@ -5713,7 +5790,7 @@ def maintenance_page(conn) -> None:
                         }
                         if changes:
                             chg_df = pd.DataFrame(changes).drop(
-                                columns=["_update_points", "_update_rolloff", "_update_perfect", "_update_manager", "_update_status"],
+                                columns=["_update_points", "_update_rolloff", "_update_perfect", "_update_manager", "_update_status", "_update_hire_date"],
                                 errors="ignore",
                             )
                             st.session_state["bulk_override_changes"] = changes
@@ -5786,6 +5863,12 @@ def maintenance_page(conn) -> None:
                         update_manager=bool(chg.get("_update_manager")),
                         employment_type=chg.get("New Status") or "Full-Time",
                         update_employment_type=bool(chg.get("_update_status")),
+                        start_date=(
+                            date.fromisoformat(chg["New Hire Date"])
+                            if chg.get("New Hire Date")
+                            else None
+                        ),
+                        update_start_date=bool(chg.get("_update_hire_date")),
                         note="Bulk override — prior calculation correction",
                     )
                     applied += 1
@@ -5961,6 +6044,7 @@ def corrective_action_page(conn, building: str) -> None:
                    COALESCE(e.point_total, 0.0) AS point_total,
                    COALESCE(e.manager, '') AS manager,
                    e.rolloff_date::text AS rolloff_date,
+                   e.start_date::text AS start_date,
                    (
                        SELECT MAX(ph3.point_date::date)::text
                          FROM points_history ph3
@@ -5987,7 +6071,14 @@ def corrective_action_page(conn, building: str) -> None:
               FROM employees e
              WHERE e.employee_id IN ({ph})
                AND COALESCE(e.is_active, 1) = 1
-               AND COALESCE(e.point_total, 0.0) >= 5.0
+               AND (
+                   COALESCE(e.point_total, 0.0) >= 5.0
+                   OR (
+                       COALESCE(e.point_total, 0.0) >= 2.0
+                       AND e.start_date IS NOT NULL
+                       AND (CURRENT_DATE - e.start_date::date) <= 60
+                   )
+               )
              ORDER BY COALESCE(e.point_total, 0.0) DESC,
                       lower(e.last_name), lower(e.first_name)
         """
@@ -6002,6 +6093,7 @@ def corrective_action_page(conn, building: str) -> None:
                        COALESCE(e.point_total, 0.0) AS point_total,
                        COALESCE(e.manager, '') AS manager,
                        e.rolloff_date,
+                       e.start_date,
                        (SELECT MAX(date(ph3.point_date)) FROM points_history ph3
                          WHERE ph3.employee_id = e.employee_id
                            AND COALESCE(ph3.points,0.0) > 0.0
@@ -6022,6 +6114,11 @@ def corrective_action_page(conn, building: str) -> None:
                    AND COALESCE(e.is_active, 1) = 1
               ) sub
              WHERE point_total >= 5.0
+                OR (
+                    point_total >= 2.0
+                    AND start_date IS NOT NULL
+                    AND (julianday('now') - julianday(start_date)) <= 60
+                )
              ORDER BY point_total DESC, lower(last_name), lower(first_name)
         """
 
@@ -6072,8 +6169,12 @@ def corrective_action_page(conn, building: str) -> None:
         except Exception:
             return None
 
-    def threshold_level(pts: float) -> int:
-        """Returns 0-3 for the highest corrective action tier crossed, -1 if below 5.0."""
+    def is_new_hire(row: dict) -> bool:
+        sd = parse_iso_date(row.get("start_date"))
+        return sd is not None and (today - sd).days <= 60
+
+    def threshold_level(pts: float, new_hire: bool = False) -> int:
+        """Returns 0-3 for the highest corrective action tier crossed, -1 if below threshold."""
         if pts > 7.5:
             return 3  # termination
         if pts >= 7.0:
@@ -6082,35 +6183,42 @@ def corrective_action_page(conn, building: str) -> None:
             return 1  # verbal warning
         if pts >= 5.0:
             return 0  # coaching
+        if new_hire and pts >= 2.0:
+            return 0  # new hire corrective action
         return -1
 
     def needs_new_warning(row: dict) -> bool:
         warning_dt = parse_iso_date(row.get("point_warning_date"))
+        nh = is_new_hire(row)
         if warning_dt is None:
             return True
-        current_level = threshold_level(float(row.get("point_total") or 0))
-        warned_level = threshold_level(float(row.get("points_at_warning") or 0))
+        current_level = threshold_level(float(row.get("point_total") or 0), nh)
+        warned_level = threshold_level(float(row.get("points_at_warning") or 0), nh)
         return current_level > warned_level
 
     needs_warning_rows = [row for row in ca_rows if needs_new_warning(row)]
     already_warned_rows = [row for row in ca_rows if not needs_new_warning(row)]
 
     # (key, label, range_str, predicate, hex, r, g, b)
+    # predicate is pts-only; new_hire_coaching uses False and is matched separately
     tiers = [
-        ("termination",     "Termination",    "7.6 +",     lambda p: p > 7.5,         "#ff3b30", 255, 59,  48),
-        ("written_warning", "Written Warning", "7.0 - 7.5", lambda p: 7.0 <= p <= 7.5, "#bf5af2", 191, 90, 242),
-        ("verbal_warning",  "Verbal Warning",  "6.0 - 6.5", lambda p: 6.0 <= p <= 6.5, "#ffd60a", 255, 214, 10),
-        ("verbal_coaching", "Verbal Coaching", "5.0 - 5.5", lambda p: 5.0 <= p <= 5.5, "#32ade6", 50, 173, 230),
+        ("termination",       "Termination",        "7.6 +",     lambda p: p > 7.5,         "#ff3b30", 255, 59,  48),
+        ("written_warning",   "Written Warning",    "7.0 - 7.5", lambda p: 7.0 <= p <= 7.5, "#bf5af2", 191, 90, 242),
+        ("verbal_warning",    "Verbal Warning",     "6.0 - 6.5", lambda p: 6.0 <= p <= 6.5, "#ffd60a", 255, 214, 10),
+        ("verbal_coaching",   "Verbal Coaching",    "5.0 - 5.5", lambda p: 5.0 <= p <= 5.5, "#32ade6", 50, 173, 230),
+        ("new_hire_coaching", "New Hire (≤60 days)", "2.0+",     lambda p: False,            "#ff9f0a", 255, 159, 10),
     ]
 
-    def tier_for(pts):
+    def tier_for(pts, new_hire=False):
+        if new_hire and 2.0 <= pts < 5.0:
+            return "new_hire_coaching", "New Hire (≤60 days)", "2.0+", "#ff9f0a", 255, 159, 10
         for key, lbl, rng, fn, col, r, g, b in tiers:
             if fn(pts):
                 return key, lbl, rng, col, r, g, b
         return "none", "-", "-", "#8e8e93", 142, 142, 147
 
     if not ca_rows:
-        info_box("No active employees are currently at or above the 5.0 point threshold.")
+        info_box("No active employees are currently at or above the corrective action threshold.")
         return
 
     # ── Shared CSS injected once ──────────────────────────────────────────────
@@ -6278,7 +6386,11 @@ def corrective_action_page(conn, building: str) -> None:
         f"{len(already_warned_rows)} already warned</div>"
     )
     for key, lbl, rng, fn, col, r, g, b in tiers:
-        n = sum(1 for row in needs_warning_rows if fn(float(row.get("point_total") or 0)))
+        if key == "new_hire_coaching":
+            n = sum(1 for row in needs_warning_rows
+                    if is_new_hire(row) and 2.0 <= float(row.get("point_total") or 0) < 5.0)
+        else:
+            n = sum(1 for row in needs_warning_rows if fn(float(row.get("point_total") or 0)))
         if n == 0:
             continue
         pills_html += (
@@ -6300,7 +6412,7 @@ def corrective_action_page(conn, building: str) -> None:
         edit_row = next((r for r in ca_rows if int(r["employee_id"]) == editing_id), None)
         if edit_row:
             pts_e = float(edit_row.get("point_total") or 0)
-            _, lbl_e, _, col_e, r_e, g_e, b_e = tier_for(pts_e)
+            _, lbl_e, _, col_e, r_e, g_e, b_e = tier_for(pts_e, is_new_hire(edit_row))
             st.markdown(
                 f"<div class='ca-edit-panel' style='border-color:rgba({r_e},{g_e},{b_e},.35)'>"
                 f"<div class='ca-edit-title' style='color:{col_e}'>Edit warning date</div>"
@@ -6353,7 +6465,11 @@ def corrective_action_page(conn, building: str) -> None:
             return
 
         for key, label, rng, fn, col, r, g, b in tiers:
-            tier_rows = [row for row in rows if fn(float(row.get("point_total") or 0))]
+            if key == "new_hire_coaching":
+                tier_rows = [row for row in rows
+                             if is_new_hire(row) and 2.0 <= float(row.get("point_total") or 0) < 5.0]
+            else:
+                tier_rows = [row for row in rows if fn(float(row.get("point_total") or 0))]
             if not tier_rows:
                 continue
 
@@ -6401,8 +6517,9 @@ def corrective_action_page(conn, building: str) -> None:
                 if show_actions:
                     bcol1, bcol2, _ = st.columns([1, 1, 3])
                     with bcol1:
+                        pdf_tier_key = "verbal_coaching" if key == "new_hire_coaching" else key
                         pdf_bytes = generate_ca_pdf(
-                            tier_key=key,
+                            tier_key=pdf_tier_key,
                             employee_name=f"{row['first_name']} {row['last_name']}",
                             manager=row.get("manager") or "",
                             gen_date=today.strftime("%m/%d/%Y"),
