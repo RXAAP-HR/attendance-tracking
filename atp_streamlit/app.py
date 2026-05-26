@@ -6193,8 +6193,15 @@ def corrective_action_page(conn, building: str) -> None:
         nh = is_new_hire(row)
         if warning_dt is None:
             return True
-        current_level = threshold_level(float(row.get("point_total") or 0), nh)
-        warned_level = threshold_level(float(row.get("points_at_warning") or 0), nh)
+        current_pts = float(row.get("point_total") or 0)
+        warned_pts  = float(row.get("points_at_warning") or 0)
+        current_level = threshold_level(current_pts, nh)
+        # Only apply new-hire context to the warned level when the employee is
+        # still below the regular 5.0 threshold. If they're at 5.0+, the
+        # regular-tier crossing (warned_level=-1 → current_level=0) must still
+        # be detected even if their last warning was logged under the new-hire rule.
+        warned_nh = nh and current_pts < 5.0
+        warned_level = threshold_level(warned_pts, warned_nh)
         return current_level > warned_level
 
     needs_warning_rows = [row for row in ca_rows if needs_new_warning(row)]
