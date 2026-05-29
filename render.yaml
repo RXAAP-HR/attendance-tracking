@@ -1,0 +1,22 @@
+databases:
+  - name: attendance-db
+    databaseName: attendance
+    user: attendance
+    plan: free
+
+services:
+  - type: web
+    name: attendance-tracking
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run atp_streamlit/app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: attendance-db
+          property: connectionString
+      - key: DATA_DIR
+        value: /var/data
+      - key: PYTHON_VERSION
+        value: 3.11.0
