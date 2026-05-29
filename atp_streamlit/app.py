@@ -3356,7 +3356,7 @@ def _pto_metric(label: str, value: str, sub: str = "") -> None:
     )
     st.markdown(
         f"<div style='background:#0d1b2e;border:1px solid #1a3a5c;border-radius:10px;"
-        f"padding:1rem 1.25rem;text-align:center'>"
+        f"padding:1rem 1.25rem;text-align:center;min-height:6.5rem;display:flex;flex-direction:column;justify-content:center'>"
         f"<div style='font-size:.78rem;color:#4a7fa5;text-transform:uppercase;letter-spacing:.08em'>{_html_inline(label)}</div>"
         f"<div style='font-size:1.8rem;font-weight:700;color:#e8f4fd;line-height:1.2;margin-top:.3rem'>{_html_inline(value)}</div>"
         f"{sub_html}</div>",
@@ -7168,14 +7168,15 @@ def manager_report_page(conn) -> None:
             marker_color=["#00d4ff", "#7b61ff", "#00e5a0", "#ffa94d", "#ff6b6b"],
             text=[f"{p:.1f} pts<br>({dow_count.get(d,0)} events)" for d, p in zip(_DOW_ORDER, dow_pts)],
             textposition="outside",
+            cliponaxis=False,
             hovertemplate="%{x}: %{y:.1f} pts<extra></extra>",
         ))
         dow_fig.update_layout(
             title=dict(text="Points by Day of Week", font=dict(color="#c8dff5", size=13), x=0),
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=40, b=0),
-            height=240,
+            margin=dict(l=0, r=0, t=40, b=0, pad=4),
+            height=300,
             yaxis=dict(gridcolor="rgba(255,255,255,0.06)", color="#7899c8", title="Total Points"),
             xaxis=dict(color="#7899c8"),
             font=dict(color="#c8dff5"),
