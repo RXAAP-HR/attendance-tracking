@@ -727,6 +727,210 @@ def advance_due_perfect_attendance_dates(
 # YTD Roll-Off Engine (matches Beta7 apply_ytd_rolloffs exactly)
 # ---------------------------------------------------------------------------
 
+def _parse_duration_to_minutes(val) -> int:
+    """Convert strings like '35m', '1h 36m', '2h' to integer minutes."""
+    if val is None:
+        return 0
+    s = str(val).strip().lower()
+    if not s or s in ("nan", "none", "0", ""):
+        return 0
+    import re
+    total = 0
+    h_match = re.search(r"(\d+)\s*h", s)
+    m_match = re.search(r"(\d+)\s*m", s)
+    if h_match:
+        total += int(h_match.group(1)) * 60
+    if m_match:
+        total += int(m_match.group(1))
+    if total == 0:
+        try:
+            total = int(float(s))
+        except (ValueError, TypeError):
+            pass
+    return total
+
+
+def parse_wosh_excel(file) -> tuple[list[dict], str]:
+    """
+    Parse a WOSH xlsx file.
+    Returns (rows, week_start_date_iso).
+    Reads the 'All Exceptions' sheet; real data starts at row 1 (0-indexed).
+    """
+    import pandas as pd
+    import re
+
+    df = pd.read_excel(file, sheet_name="All Exceptions", header=0, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    col_map = {
+        "employee_id":     ["employee id", "emp id", "employee #", "id"],
+        "employee_name":   ["employee name", "name", "employee"],
+        "manager":         ["manager", "supervisor"],
+        "location":        ["location", "building", "site"],
+        "department":      ["department", "dept"],
+        "date":            ["date", "exception date"],
+        "scheduled_start": ["scheduled start", "sched start", "scheduled in"],
+        "scheduled_end":   ["scheduled end", "sched end", "scheduled out"],
+        "actual_clock_in": ["actual clock in", "clock in", "actual in"],
+        "actual_clock_out":["actual clock out", "clock out", "actual out"],
+        "time_early":      ["time early", "early", "early minutes", "time early (min)"],
+        "time_late":       ["time late", "late", "late minutes", "time late (min)"],
+        "exception_type":  ["exception type", "exception", "type"],
+    }
+
+    def _find_col(candidates: list[str]) -> str | None:
+        lower_cols = {c.lower(): c for c in df.columns}
+        for c in candidates:
+            if c in lower_cols:
+                return lower_cols[c]
+        return None
+
+    resolved = {k: _find_col(v) for k, v in col_map.items()}
+
+    def _get(row, key):
+        col = resolved.get(key)
+        if col and col in row:
+            v = row[col]
+            return None if str(v).strip() in ("nan", "None", "") else str(v).strip()
+        return None
+
+    rows = []
+    for _, row in df.iterrows():
+        emp_id_raw = _get(row, "employee_id")
+        try:
+            emp_id = int(float(emp_id_raw)) if emp_id_raw else None
+        except (ValueError, TypeError):
+            emp_id = None
+
+        date_raw = _get(row, "date")
+        if not date_raw:
+            continue
+
+        rows.append({
+            "employee_id":      emp_id,
+            "employee_name":    _get(row, "employee_name"),
+            "manager":          _get(row, "manager"),
+            "location":         _get(row, "location"),
+            "department":       _get(row, "department"),
+            "date":             date_raw[:10] if date_raw else None,
+            "scheduled_start":  _get(row, "scheduled_start"),
+            "scheduled_end":    _get(row, "scheduled_end"),
+            "actual_clock_in":  _get(row, "actual_clock_in"),
+            "actual_clock_out": _get(row, "actual_clock_out"),
+            "time_early_minutes": _parse_duration_to_minutes(_get(row, "time_early")),
+            "time_late_minutes":  _parse_duration_to_minutes(_get(row, "time_late")),
+            "exception_type":   _get(row, "exception_type"),
+        })
+
+    # Derive week_start_date from first valid date (Monday of that week)
+    week_start = date.today().isoformat()
+    for r in rows:
+        if r.get("date"):
+            try:
+                d = date.fromisoformat(r["date"][:10])
+                week_start = (d - timedelta(days=d.weekday())).isoformat()
+                break
+            except Exception:
+                pass
+
+    return rows, week_start
+
+
+def parse_period_totals_excel(file) -> tuple[list[dict], str, str]:
+    """
+    Parse a Period Totals Report xlsx.
+    Real headers are on row 6 (0-indexed row 5).
+    Returns (rows, period_start_iso, period_end_iso).
+    """
+    import pandas as pd
+
+    df = pd.read_excel(file, sheet_name=0, header=5, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    col_map = {
+        "employee_id":    ["employee id", "emp id", "employee #", "id"],
+        "employee_name":  ["employee name", "name", "employee"],
+        "reg_hours":      ["regular", "reg hours", "reg", "regular hours"],
+        "ot_hours":       ["overtime", "ot hours", "ot", "overtime hours"],
+        "vac_hours":      ["vacation", "vac hours", "vac", "vacation hours"],
+        "personal_hours": ["personal", "personal hours"],
+        "other_hours":    ["other", "other hours"],
+        "total_hours":    ["total", "total hours"],
+    }
+
+    def _find_col(candidates: list[str]) -> str | None:
+        lower_cols = {c.lower(): c for c in df.columns}
+        for c in candidates:
+            if c in lower_cols:
+                return lower_cols[c]
+        return None
+
+    resolved = {k: _find_col(v) for k, v in col_map.items()}
+
+    def _get_float(row, key) -> float:
+        col = resolved.get(key)
+        if col and col in row:
+            v = row[col]
+            try:
+                return float(str(v).strip()) if str(v).strip() not in ("nan", "None", "") else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+        return 0.0
+
+    def _get_str(row, key) -> str | None:
+        col = resolved.get(key)
+        if col and col in row:
+            v = row[col]
+            return None if str(v).strip() in ("nan", "None", "") else str(v).strip()
+        return None
+
+    rows = []
+    for _, row in df.iterrows():
+        name = _get_str(row, "employee_name")
+        if not name:
+            continue
+        emp_id_raw = _get_str(row, "employee_id")
+        try:
+            emp_id = int(float(emp_id_raw)) if emp_id_raw else None
+        except (ValueError, TypeError):
+            emp_id = None
+        rows.append({
+            "employee_id":    emp_id,
+            "employee_name":  name,
+            "reg_hours":      _get_float(row, "reg_hours"),
+            "ot_hours":       _get_float(row, "ot_hours"),
+            "vac_hours":      _get_float(row, "vac_hours"),
+            "personal_hours": _get_float(row, "personal_hours"),
+            "other_hours":    _get_float(row, "other_hours"),
+            "total_hours":    _get_float(row, "total_hours"),
+        })
+
+    # Try to read period dates from the raw file (first few rows before header)
+    period_start = ""
+    period_end = ""
+    try:
+        raw = pd.read_excel(file, sheet_name=0, header=None, nrows=6, dtype=str)
+        for _, r in raw.iterrows():
+            for v in r:
+                s = str(v).strip()
+                if "period" in s.lower() or "/" in s:
+                    import re
+                    dates = re.findall(r"\d{1,2}/\d{1,2}/\d{4}", s)
+                    if len(dates) >= 2:
+                        from datetime import datetime as _dt
+                        period_start = _dt.strptime(dates[0], "%m/%d/%Y").date().isoformat()
+                        period_end   = _dt.strptime(dates[1], "%m/%d/%Y").date().isoformat()
+    except Exception:
+        pass
+
+    if not period_start:
+        period_start = date.today().isoformat()
+    if not period_end:
+        period_end = date.today().isoformat()
+
+    return rows, period_start, period_end
+
+
 def _first_of_month(d: date) -> date:
     return d.replace(day=1)
 

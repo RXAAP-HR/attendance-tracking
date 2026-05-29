@@ -63,6 +63,44 @@ def ensure_schema(conn):
         """)
         cur.execute("ALTER TABLE pto_uploads ADD COLUMN IF NOT EXISTS request_date TEXT;")
 
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS wosh_uploads (
+            id BIGSERIAL PRIMARY KEY,
+            employee_id BIGINT,
+            employee_name TEXT,
+            manager TEXT,
+            location TEXT,
+            department TEXT,
+            date TEXT,
+            scheduled_start TEXT,
+            scheduled_end TEXT,
+            actual_clock_in TEXT,
+            actual_clock_out TEXT,
+            time_early_minutes INTEGER DEFAULT 0,
+            time_late_minutes INTEGER DEFAULT 0,
+            exception_type TEXT,
+            week_start_date TEXT,
+            uploaded_at TEXT
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS period_totals_uploads (
+            id BIGSERIAL PRIMARY KEY,
+            employee_id BIGINT,
+            employee_name TEXT,
+            reg_hours DOUBLE PRECISION DEFAULT 0.0,
+            ot_hours DOUBLE PRECISION DEFAULT 0.0,
+            vac_hours DOUBLE PRECISION DEFAULT 0.0,
+            personal_hours DOUBLE PRECISION DEFAULT 0.0,
+            other_hours DOUBLE PRECISION DEFAULT 0.0,
+            total_hours DOUBLE PRECISION DEFAULT 0.0,
+            period_start TEXT,
+            period_end TEXT,
+            uploaded_at TEXT
+        );
+        """)
+
         # Indexes (idempotent)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_emp_name ON employees(last_name, first_name);")
         cur.execute('CREATE INDEX IF NOT EXISTS idx_emp_loc_name ON employees("Location", last_name, first_name);')
@@ -70,6 +108,9 @@ def ensure_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_points_date ON points_history(point_date);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pto_emp ON pto_uploads(employee_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pto_dates ON pto_uploads(start_date, end_date);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_wosh_week ON wosh_uploads(week_start_date);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_wosh_mgr ON wosh_uploads(manager);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_period_mgr ON period_totals_uploads(employee_id);")
 
         conn.commit()
         return
@@ -137,6 +178,44 @@ def ensure_schema(conn):
     if "request_date" not in pto_cols:
         cur.execute("ALTER TABLE pto_uploads ADD COLUMN request_date TEXT;")
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS wosh_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER,
+            employee_name TEXT,
+            manager TEXT,
+            location TEXT,
+            department TEXT,
+            date TEXT,
+            scheduled_start TEXT,
+            scheduled_end TEXT,
+            actual_clock_in TEXT,
+            actual_clock_out TEXT,
+            time_early_minutes INTEGER DEFAULT 0,
+            time_late_minutes INTEGER DEFAULT 0,
+            exception_type TEXT,
+            week_start_date TEXT,
+            uploaded_at TEXT
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS period_totals_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER,
+            employee_name TEXT,
+            reg_hours REAL DEFAULT 0.0,
+            ot_hours REAL DEFAULT 0.0,
+            vac_hours REAL DEFAULT 0.0,
+            personal_hours REAL DEFAULT 0.0,
+            other_hours REAL DEFAULT 0.0,
+            total_hours REAL DEFAULT 0.0,
+            period_start TEXT,
+            period_end TEXT,
+            uploaded_at TEXT
+        );
+    """)
+
     # Indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_emp_name ON employees(last_name, first_name);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_points_emp ON points_history(employee_id);")
@@ -144,5 +223,8 @@ def ensure_schema(conn):
     cur.execute('CREATE INDEX IF NOT EXISTS idx_emp_loc_name ON employees("Location", last_name, first_name);')
     cur.execute("CREATE INDEX IF NOT EXISTS idx_pto_emp ON pto_uploads(employee_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_pto_dates ON pto_uploads(start_date, end_date);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_wosh_week ON wosh_uploads(week_start_date);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_wosh_mgr ON wosh_uploads(manager);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_period_mgr ON period_totals_uploads(employee_id);")
 
     conn.commit()

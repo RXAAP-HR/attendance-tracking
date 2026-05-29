@@ -5889,6 +5889,43 @@ def maintenance_page(conn) -> None:
             }
             st.rerun()
 
+    divider()
+
+    # ── WOSH & Period Totals Data Management ─────────────────────────────────
+    section_label("WOSH & Period Totals Data")
+    wosh_col, pt_col = st.columns(2)
+
+    with wosh_col:
+        st.markdown("**WOSH Data**")
+        _wosh_weeks_maint = repo.get_wosh_weeks(conn)
+        if _wosh_weeks_maint:
+            st.caption(f"{len(_wosh_weeks_maint)} week(s) stored: {min(_wosh_weeks_maint)} – {max(_wosh_weeks_maint)}")
+            _wosh_count = len(repo.load_wosh_data(conn))
+            st.caption(f"{_wosh_count} total exception rows")
+        else:
+            st.caption("No WOSH data stored.")
+        _confirm_wosh = st.checkbox("Confirm clear WOSH data", key="maint_wosh_confirm")
+        if st.button("Clear WOSH Data", disabled=not _confirm_wosh, key="maint_wosh_clear"):
+            repo.clear_wosh_data(conn)
+            conn.commit()
+            st.success("WOSH data cleared.")
+            st.rerun()
+
+    with pt_col:
+        st.markdown("**Period Totals Data**")
+        _pt_meta_maint = repo.get_period_totals_meta(conn)
+        if _pt_meta_maint:
+            st.caption(f"Period on file: {_pt_meta_maint['period_start']} – {_pt_meta_maint['period_end']}")
+            _pt_count = len(repo.load_period_totals(conn))
+            st.caption(f"{_pt_count} employee rows")
+        else:
+            st.caption("No period totals stored.")
+        _confirm_pt = st.checkbox("Confirm clear period totals", key="maint_pt_confirm")
+        if st.button("Clear Period Totals", disabled=not _confirm_pt, key="maint_pt_clear"):
+            repo.clear_period_totals(conn)
+            conn.commit()
+            st.success("Period totals cleared.")
+            st.rerun()
 
 
 def run_operations_page(conn) -> None:
@@ -6628,6 +6665,8 @@ def build_manager_report_pdf(
     pts_from: "date",
     pts_to: "date",
     emp_type_map: dict,   # employee_id (int) → employment_type (str)
+    wosh_df=None,         # pd.DataFrame or None — WOSH data for this manager
+    period_totals_df=None,  # pd.DataFrame or None — period totals for this manager's team
 ) -> bytes:
     """Generate a manager department report PDF."""
     from reportlab.graphics.shapes import Drawing, String
@@ -6986,6 +7025,426 @@ def build_manager_report_pdf(
         top_t.setStyle(TableStyle(top_ts))
         story.append(top_t)
 
+    # ── Shift Exceptions (WOSH) ──────────────────────────────────────────────
+    if wosh_df is not None and not wosh_df.empty:
+        story.append(Spacer(1, 0.18 * inch))
+        _wosh_weeks = sorted(wosh_df["week_start_date"].dropna().unique().tolist())
+        _wosh_range = f"{_wosh_weeks[0]} – {_wosh_weeks[-1]}" if _wosh_weeks else ""
+        story.append(Paragraph(f"SHIFT EXCEPTIONS (WOSH)  {_wosh_range}", sec_s))
+
+        _w_total  = len(wosh_df)
+        _w_emps   = wosh_df["employee_name"].nunique()
+        _w_early  = int(wosh_df["time_early_minutes"].sum())
+        _w_late   = int(wosh_df["time_late_minutes"].sum())
+        story.append(Paragraph(
+            f"Total Exceptions: <b>{_w_total}</b> &nbsp;|&nbsp; "
+            f"Employees Affected: <b>{_w_emps}</b> &nbsp;|&nbsp; "
+            f"Early: <b>{_w_early // 60}h {_w_early % 60}m</b> &nbsp;|&nbsp; "
+            f"Late: <b>{_w_late // 60}h {_w_late % 60}m</b>",
+            cell_s,
+        ))
+        story.append(Spacer(1, 0.08 * inch))
+
+        _ws = (
+            wosh_df.groupby("employee_name")
+            .agg(
+                early_arr=("time_early_minutes", lambda x: (x > 0).sum()),
+                late_dep=("time_late_minutes", lambda x: (x > 0).sum()),
+                total_early=("time_early_minutes", "sum"),
+                total_late=("time_late_minutes", "sum"),
+                days=("date", "nunique"),
+            )
+            .reset_index()
+        )
+        _ws["extra_time"] = _ws.apply(
+            lambda r: f"{int(r['total_early'] + r['total_late']) // 60}h {int(r['total_early'] + r['total_late']) % 60}m",
+            axis=1,
+        )
+        w_hdr = [Paragraph(h, hdr_s) for h in ["EMPLOYEE", "EARLY ARR.", "LATE DEP.", "EXTRA TIME", "DAYS"]]
+        w_rows = [w_hdr]
+        for _, wr in _ws.iterrows():
+            w_rows.append([
+                Paragraph(str(wr["employee_name"]), cell_s),
+                Paragraph(str(int(wr["early_arr"])), cell_s),
+                Paragraph(str(int(wr["late_dep"])), cell_s),
+                Paragraph(str(wr["extra_time"]), cell_s),
+                Paragraph(str(int(wr["days"])), cell_s),
+            ])
+        w_cw = [CW * 0.40, CW * 0.15, CW * 0.15, CW * 0.17, CW * 0.13]
+        w_t = Table(w_rows, colWidths=w_cw, repeatRows=1)
+        _w_style = [
+            ("BACKGROUND",    (0, 0), (-1, 0), C_NAVY),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+            ("GRID",          (0, 0), (-1, -1), 0.25, C_DIVIDER),
+        ]
+        for i in range(1, len(w_rows)):
+            _w_style.append(("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE))
+        w_t.setStyle(TableStyle(_w_style))
+        story.append(w_t)
+
+    # ── Hours & OT ───────────────────────────────────────────────────────────
+    if period_totals_df is not None and not period_totals_df.empty:
+        story.append(Spacer(1, 0.18 * inch))
+        _pt_start = str(period_totals_df.get("period_start", pd.Series()).iloc[0] if "period_start" in period_totals_df.columns and len(period_totals_df) else "")
+        _pt_end   = str(period_totals_df.get("period_end",   pd.Series()).iloc[0] if "period_end" in period_totals_df.columns and len(period_totals_df) else "")
+        _pt_label = f"{_pt_start} – {_pt_end}" if _pt_start else ""
+        story.append(Paragraph(f"HOURS & OT SUMMARY  {_pt_label}", sec_s))
+
+        _pt_total_h  = period_totals_df["total_hours"].sum()
+        _pt_total_ot = period_totals_df["ot_hours"].sum()
+        story.append(Paragraph(
+            f"Team Total Hours: <b>{_pt_total_h:.1f}</b> &nbsp;|&nbsp; OT Hours: <b>{_pt_total_ot:.1f}</b>",
+            cell_s,
+        ))
+        story.append(Spacer(1, 0.08 * inch))
+
+        pt_hdr = [Paragraph(h, hdr_s) for h in ["EMPLOYEE", "REG", "OT", "VAC", "PERSONAL", "OTHER", "TOTAL"]]
+        pt_rows = [pt_hdr]
+        for _, pr in period_totals_df.sort_values("employee_name").iterrows():
+            pt_rows.append([
+                Paragraph(str(pr.get("employee_name", "")), cell_s),
+                Paragraph(f"{float(pr.get('reg_hours', 0)):.1f}", cell_s),
+                Paragraph(f"{float(pr.get('ot_hours', 0)):.1f}", bold_s),
+                Paragraph(f"{float(pr.get('vac_hours', 0)):.1f}", cell_s),
+                Paragraph(f"{float(pr.get('personal_hours', 0)):.1f}", cell_s),
+                Paragraph(f"{float(pr.get('other_hours', 0)):.1f}", cell_s),
+                Paragraph(f"{float(pr.get('total_hours', 0)):.1f}", bold_s),
+            ])
+        # Total row
+        pt_rows.append([
+            Paragraph("TOTAL", bold_s),
+            Paragraph(f"{period_totals_df['reg_hours'].sum():.1f}", bold_s),
+            Paragraph(f"{period_totals_df['ot_hours'].sum():.1f}", bold_s),
+            Paragraph(f"{period_totals_df['vac_hours'].sum():.1f}", bold_s),
+            Paragraph(f"{period_totals_df['personal_hours'].sum():.1f}", bold_s),
+            Paragraph(f"{period_totals_df['other_hours'].sum():.1f}", bold_s),
+            Paragraph(f"{period_totals_df['total_hours'].sum():.1f}", bold_s),
+        ])
+        pt_cw = [CW * 0.30, CW * 0.10, CW * 0.10, CW * 0.10, CW * 0.12, CW * 0.10, CW * 0.18]
+        pt_t = Table(pt_rows, colWidths=pt_cw, repeatRows=1)
+        _pt_style = [
+            ("BACKGROUND",    (0, 0), (-1, 0), C_NAVY),
+            ("BACKGROUND",    (0, len(pt_rows) - 1), (-1, -1), colors.HexColor("#EEF2FF")),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+            ("GRID",          (0, 0), (-1, -1), 0.25, C_DIVIDER),
+        ]
+        for i in range(1, len(pt_rows) - 1):
+            _pt_style.append(("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE))
+        pt_t.setStyle(TableStyle(_pt_style))
+        story.append(pt_t)
+
+    doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+    return buffer.getvalue()
+
+
+def build_executive_report_pdf(
+    conn,
+    all_managers: list[str],
+    pto_df,               # full pd.DataFrame or None
+    all_wosh: list,       # raw rows from repo.load_wosh_data
+    all_period_totals: list,  # raw rows from repo.load_period_totals
+    pt_meta: dict | None,
+    pts_from: "date",
+    pts_to: "date",
+) -> bytes:
+    """Company-wide executive summary PDF, followed by per-manager sections."""
+    buffer = BytesIO()
+
+    C_NAVY    = colors.HexColor("#0D2461")
+    C_RED     = colors.HexColor("#CC1F2D")
+    C_TEXT    = colors.HexColor("#0D1117")
+    C_MUTED   = colors.HexColor("#64748B")
+    C_DIVIDER = colors.HexColor("#E2E8F0")
+    C_ROW_ALT = colors.HexColor("#F5F7FF")
+    C_WHITE   = colors.white
+
+    PW, PH = letter
+    LM = RM = 0.5 * inch
+    HEADER_H = 0.82 * inch
+    TM = HEADER_H + 0.18 * inch
+    BM = 0.48 * inch
+    CW = PW - LM - RM
+
+    today = date.today()
+    gen_on = datetime.now().strftime("%m/%d/%Y  %I:%M %p")
+
+    styles = getSampleStyleSheet()
+    def S(name, **kw):
+        return ParagraphStyle(name, parent=styles["Normal"], **kw)
+
+    lbl_s  = S("ELbl",  fontName="Helvetica-Bold", fontSize=7,   textColor=C_MUTED, spaceAfter=2)
+    val_s  = S("EVal",  fontName="Helvetica-Bold", fontSize=11,  textColor=C_TEXT)
+    hdr_s  = S("EHdr",  fontName="Helvetica-Bold", fontSize=8,   textColor=C_WHITE)
+    cell_s = S("ECell", fontName="Helvetica",       fontSize=8.5, textColor=C_TEXT)
+    bold_s = S("EBold", fontName="Helvetica-Bold",  fontSize=8.5, textColor=C_TEXT)
+    sec_s  = S("ESec",  fontName="Helvetica-Bold",  fontSize=10,  textColor=C_NAVY, spaceBefore=14, spaceAfter=4)
+    mgr_div_s = S("EMgr", fontName="Helvetica-Bold", fontSize=13, textColor=C_WHITE, spaceBefore=10, spaceAfter=4)
+
+    LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+
+    def draw_page(canvas, doc):
+        canvas.saveState()
+        stripe_y = PH - HEADER_H
+        canvas.setFillColor(C_NAVY)
+        canvas.rect(0, stripe_y - 3.5, PW, 3.5, fill=1, stroke=0)
+        canvas.setFillColor(C_RED)
+        canvas.rect(0, stripe_y - 6.0, PW, 2.5, fill=1, stroke=0)
+        logo_h = 0.52 * inch
+        logo_y = (PH - HEADER_H) + (HEADER_H - logo_h) / 2
+        if LOGO_PATH.exists():
+            try:
+                canvas.drawImage(str(LOGO_PATH), LM, logo_y, height=logo_h, width=2.6 * inch,
+                                 preserveAspectRatio=True, mask="auto")
+            except Exception:
+                pass
+        mid_y = PH - HEADER_H / 2
+        canvas.setFillColor(C_MUTED); canvas.setFont("Helvetica", 7.5)
+        canvas.drawRightString(PW - RM, mid_y + 15, "AMERICAN ASSOCIATED PHARMACIES")
+        canvas.setFillColor(C_NAVY); canvas.setFont("Helvetica-Bold", 17)
+        canvas.drawRightString(PW - RM, mid_y - 1, "EXECUTIVE SUMMARY REPORT")
+        canvas.setFillColor(C_MUTED); canvas.setFont("Helvetica", 7.5)
+        canvas.drawRightString(PW - RM, mid_y - 15, f"Generated  {gen_on}")
+        foot_y = BM - 6
+        canvas.setStrokeColor(C_DIVIDER); canvas.setLineWidth(0.5)
+        canvas.line(LM, foot_y, PW - RM, foot_y)
+        canvas.setFillColor(C_MUTED); canvas.setFont("Helvetica", 7)
+        canvas.drawString(LM, foot_y - 11, "CONFIDENTIAL — FOR INTERNAL USE ONLY")
+        canvas.drawCentredString(PW / 2, foot_y - 11, "Executive Report")
+        canvas.drawRightString(PW - RM, foot_y - 11, f"Page {doc.page}")
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(buffer, pagesize=letter,
+                            leftMargin=LM, rightMargin=RM,
+                            topMargin=TM, bottomMargin=BM)
+    story = []
+
+    wosh_df_all   = pd.DataFrame([dict(r) for r in all_wosh]) if all_wosh else pd.DataFrame()
+    pt_df_all     = pd.DataFrame([dict(r) for r in all_period_totals]) if all_period_totals else pd.DataFrame()
+
+    # ── Executive Summary page ────────────────────────────────────────────────
+    _param = "%s" if is_pg(conn) else "?"
+    all_emp_rows = fetchall(conn,
+        "SELECT employee_id, last_name, first_name, manager, COALESCE(point_total,0) AS point_total "
+        "FROM employees WHERE is_active=1 ORDER BY last_name, first_name"
+    )
+    total_emps = len(all_emp_rows)
+
+    _pt_h   = float(pt_df_all["total_hours"].sum()) if not pt_df_all.empty else 0.0
+    _pt_ot  = float(pt_df_all["ot_hours"].sum()) if not pt_df_all.empty else 0.0
+    _pto_h  = float(pto_df["hours"].sum()) if pto_df is not None and not pto_df.empty else 0.0
+    _exc_ct = len(wosh_df_all) if not wosh_df_all.empty else 0
+
+    story.append(Paragraph("COMPANY SUMMARY", sec_s))
+    _period_label = f"{pts_from.strftime('%m/%d/%Y')} – {pts_to.strftime('%m/%d/%Y')}"
+    summary_kv = [
+        ("REPORT PERIOD",    _period_label),
+        ("TOTAL EMPLOYEES",  str(total_emps)),
+        ("TOTAL HOURS",      f"{_pt_h:.1f}"),
+        ("TOTAL OT HOURS",   f"{_pt_ot:.1f}"),
+        ("TOTAL PTO HOURS",  f"{_pto_h:.0f}"),
+        ("SHIFT EXCEPTIONS", str(_exc_ct)),
+    ]
+    kv_data = [[Paragraph(k, lbl_s), Paragraph(v, val_s)] for k, v in summary_kv]
+    kv_t = Table(kv_data, colWidths=[CW * 0.40, CW * 0.60])
+    kv_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("BOX",           (0, 0), (-1, -1), 0.5, C_DIVIDER),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.25, C_DIVIDER),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+    ]))
+    story.append(kv_t)
+    story.append(Spacer(1, 0.18 * inch))
+
+    # Top 5 OT employees
+    if not pt_df_all.empty:
+        story.append(Paragraph("TOP 5 EMPLOYEES BY OT HOURS", sec_s))
+        top_ot = pt_df_all.nlargest(5, "ot_hours")[["employee_name", "ot_hours"]]
+        ot_hdr = [Paragraph("EMPLOYEE", hdr_s), Paragraph("OT HOURS", hdr_s)]
+        ot_rows = [ot_hdr] + [[Paragraph(str(r["employee_name"]), cell_s), Paragraph(f"{r['ot_hours']:.1f}", bold_s)] for _, r in top_ot.iterrows()]
+        ot_t = Table(ot_rows, colWidths=[CW * 0.70, CW * 0.30])
+        ot_t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
+            ("GRID",       (0, 0), (-1, -1), 0.25, C_DIVIDER),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ] + [("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE) for i in range(1, len(ot_rows))]))
+        story.append(ot_t)
+        story.append(Spacer(1, 0.14 * inch))
+
+    # Top 5 exception employees
+    if not wosh_df_all.empty:
+        story.append(Paragraph("TOP 5 EMPLOYEES BY SHIFT EXCEPTIONS", sec_s))
+        top_exc = wosh_df_all.groupby("employee_name").size().nlargest(5).reset_index(name="exceptions")
+        exc_hdr = [Paragraph("EMPLOYEE", hdr_s), Paragraph("EXCEPTIONS", hdr_s)]
+        exc_rows = [exc_hdr] + [[Paragraph(str(r["employee_name"]), cell_s), Paragraph(str(r["exceptions"]), bold_s)] for _, r in top_exc.iterrows()]
+        exc_t = Table(exc_rows, colWidths=[CW * 0.70, CW * 0.30])
+        exc_t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
+            ("GRID",       (0, 0), (-1, -1), 0.25, C_DIVIDER),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ] + [("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE) for i in range(1, len(exc_rows))]))
+        story.append(exc_t)
+        story.append(Spacer(1, 0.14 * inch))
+
+    # Points tier summary
+    story.append(Paragraph("ATTENDANCE POINTS — TIER SUMMARY", sec_s))
+    tiers = [(0, 1.9, "Clean (0–1.9)"), (2, 3.9, "Caution (2–3.9)"), (4, 5.9, "Warning (4–5.9)"), (6, 999, "Critical (6+)")]
+    tier_hdr = [Paragraph("TIER", hdr_s), Paragraph("EMPLOYEES", hdr_s)]
+    tier_rows = [tier_hdr]
+    for lo, hi, label in tiers:
+        cnt = sum(1 for r in all_emp_rows if lo <= float(r["point_total"] or 0) <= hi)
+        tier_rows.append([Paragraph(label, cell_s), Paragraph(str(cnt), bold_s)])
+    tier_t = Table(tier_rows, colWidths=[CW * 0.70, CW * 0.30])
+    tier_t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
+        ("GRID",       (0, 0), (-1, -1), 0.25, C_DIVIDER),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+    ] + [("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE) for i in range(1, len(tier_rows))]))
+    story.append(tier_t)
+
+    # ── Per-manager sections ──────────────────────────────────────────────────
+    from reportlab.platypus import PageBreak as _PB
+    for mgr in sorted(all_managers):
+        story.append(_PB())
+
+        # Manager divider banner
+        mgr_banner = Table(
+            [[Paragraph(f"MANAGER: {mgr.upper()}", mgr_div_s)]],
+            colWidths=[CW],
+        )
+        mgr_banner.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C_NAVY),
+            ("TOPPADDING",    (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+        ]))
+        story.append(mgr_banner)
+        story.append(Spacer(1, 0.12 * inch))
+
+        # Team data
+        _param_local = "%s" if is_pg(conn) else "?"
+        _team_rows = fetchall(conn,
+            f"SELECT employee_id, last_name, first_name, COALESCE(point_total,0) AS point_total, "
+            f"rolloff_date, perfect_attendance, COALESCE(employment_type,'Full-Time') AS employment_type "
+            f"FROM employees WHERE is_active=1 AND manager={_param_local} ORDER BY last_name, first_name",
+            (mgr,),
+        )
+        _team = [dict(r) for r in _team_rows]
+        _team_ids = {int(e["employee_id"]) for e in _team}
+        _emp_type_map = {int(e["employee_id"]): e.get("employment_type", "Full-Time") for e in _team}
+
+        _headcount = len(_team)
+        _avg_pts = sum(float(e.get("point_total") or 0) for e in _team) / _headcount if _headcount else 0
+        _at_risk  = sum(1 for e in _team if float(e.get("point_total") or 0) >= 5.0)
+
+        _sum_data = [
+            [Paragraph("HEADCOUNT", lbl_s), Paragraph("AVG POINTS", lbl_s), Paragraph("AT RISK (≥5.0)", lbl_s)],
+            [Paragraph(str(_headcount), val_s), Paragraph(f"{_avg_pts:.1f}", val_s), Paragraph(str(_at_risk), val_s)],
+        ]
+        _st = Table(_sum_data, colWidths=[CW / 3] * 3)
+        _st.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C_DIVIDER),
+            ("INNERGRID",     (0, 0), (-1, -1), 0.25, C_DIVIDER),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(_st)
+        story.append(Spacer(1, 0.10 * inch))
+
+        # Point events (reuse the same date range)
+        if _team_ids:
+            _ph = ",".join([_param_local] * len(_team_ids))
+            _ev_rows = fetchall(conn,
+                f"SELECT ph.employee_id, ph.point_date, ph.points, e.last_name, e.first_name "
+                f"FROM points_history ph JOIN employees e ON e.employee_id=ph.employee_id "
+                f"WHERE ph.employee_id IN ({_ph}) AND COALESCE(ph.points,0)>0 "
+                f"AND ph.point_date>=? AND ph.point_date<=? ORDER BY ph.point_date",
+                (*_team_ids, pts_from.isoformat(), pts_to.isoformat()),
+            )
+            if _ev_rows:
+                story.append(Paragraph(f"POINT EVENTS  {pts_from.strftime('%m/%d/%Y')} – {pts_to.strftime('%m/%d/%Y')}", sec_s))
+                _ev_summary: dict[int, dict] = {}
+                for _er in _ev_rows:
+                    _eid = int(_er["employee_id"])
+                    _ev_summary.setdefault(_eid, {"name": f"{_er['last_name']}, {_er['first_name']}", "pts": 0.0})
+                    _ev_summary[_eid]["pts"] += float(_er["points"] or 0)
+                _e_hdr = [Paragraph("EMPLOYEE", hdr_s), Paragraph("PTS IN PERIOD", hdr_s)]
+                _e_rows = [_e_hdr] + [[Paragraph(v["name"], cell_s), Paragraph(f"{v['pts']:.1f}", bold_s)] for v in sorted(_ev_summary.values(), key=lambda x: x["name"])]
+                _e_t = Table(_e_rows, colWidths=[CW * 0.65, CW * 0.35])
+                _e_t.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
+                    ("GRID",       (0, 0), (-1, -1), 0.25, C_DIVIDER),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ] + [("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE) for i in range(1, len(_e_rows))]))
+                story.append(_e_t)
+                story.append(Spacer(1, 0.10 * inch))
+
+        # WOSH for this manager
+        if not wosh_df_all.empty and "manager" in wosh_df_all.columns:
+            _mgr_wosh = wosh_df_all[wosh_df_all["manager"] == mgr]
+            if not _mgr_wosh.empty:
+                story.append(Paragraph("SHIFT EXCEPTIONS (WOSH)", sec_s))
+                _ww = (
+                    _mgr_wosh.groupby("employee_name")
+                    .agg(exc=("employee_name", "count"), late=("time_late_minutes", "sum"), early=("time_early_minutes", "sum"))
+                    .reset_index()
+                )
+                _ww_hdr = [Paragraph(h, hdr_s) for h in ["EMPLOYEE", "EXCEPTIONS", "LATE (min)", "EARLY (min)"]]
+                _ww_rows = [_ww_hdr] + [[
+                    Paragraph(str(r["employee_name"]), cell_s),
+                    Paragraph(str(int(r["exc"])), cell_s),
+                    Paragraph(str(int(r["late"])), cell_s),
+                    Paragraph(str(int(r["early"])), cell_s),
+                ] for _, r in _ww.iterrows()]
+                _ww_t = Table(_ww_rows, colWidths=[CW * 0.40, CW * 0.20, CW * 0.20, CW * 0.20])
+                _ww_t.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
+                    ("GRID",       (0, 0), (-1, -1), 0.25, C_DIVIDER),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ] + [("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE) for i in range(1, len(_ww_rows))]))
+                story.append(_ww_t)
+                story.append(Spacer(1, 0.10 * inch))
+
+        # Period totals for this manager's team
+        if not pt_df_all.empty and _team_ids:
+            _mgr_pt = pt_df_all[pt_df_all["employee_id"].isin(_team_ids)]
+            if not _mgr_pt.empty:
+                _pt_period = f"{pt_meta['period_start']} – {pt_meta['period_end']}" if pt_meta else ""
+                story.append(Paragraph(f"HOURS & OT  {_pt_period}", sec_s))
+                _p_hdr = [Paragraph(h, hdr_s) for h in ["EMPLOYEE", "REG", "OT", "TOTAL"]]
+                _p_rows = [_p_hdr] + [[
+                    Paragraph(str(r.get("employee_name", "")), cell_s),
+                    Paragraph(f"{float(r.get('reg_hours', 0)):.1f}", cell_s),
+                    Paragraph(f"{float(r.get('ot_hours', 0)):.1f}", bold_s),
+                    Paragraph(f"{float(r.get('total_hours', 0)):.1f}", bold_s),
+                ] for _, r in _mgr_pt.sort_values("employee_name").iterrows()]
+                _p_t = Table(_p_rows, colWidths=[CW * 0.46, CW * 0.18, CW * 0.18, CW * 0.18])
+                _p_t.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
+                    ("GRID",       (0, 0), (-1, -1), 0.25, C_DIVIDER),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ] + [("BACKGROUND", (0, i), (-1, i), C_ROW_ALT if i % 2 == 1 else C_WHITE) for i in range(1, len(_p_rows))]))
+                story.append(_p_t)
+
     doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
     return buffer.getvalue()
 
@@ -7021,6 +7480,65 @@ def manager_report_page(conn) -> None:
     selected_mgr = st.selectbox("Select Manager", managers, key="mgr_report_sel")
     if not selected_mgr:
         return
+
+    # ── Upload Data ───────────────────────────────────────────────────────────
+    with st.expander("Upload Data (WOSH & Hours)", expanded=False):
+        wu_col, pt_col = st.columns(2)
+
+        with wu_col:
+            st.markdown("**WOSH Report Upload**")
+            wosh_weeks = repo.get_wosh_weeks(conn)
+            if wosh_weeks:
+                from datetime import datetime as _dt2
+                _wf = min(wosh_weeks)
+                _wt = max(wosh_weeks)
+                st.caption(f"{len(wosh_weeks)} week(s) loaded: {_wf} – {_wt}")
+            else:
+                st.caption("No WOSH data loaded.")
+
+            wosh_file = st.file_uploader("Upload WOSH xlsx", type=["xlsx"], key="wosh_uploader")
+            if wosh_file:
+                try:
+                    _wosh_rows, _week_start = services.parse_wosh_excel(wosh_file)
+                    st.caption(f"Detected week: {_week_start} — {len(_wosh_rows)} exceptions parsed")
+                    st.dataframe(
+                        pd.DataFrame(_wosh_rows).head(20),
+                        use_container_width=True, hide_index=True,
+                    )
+                    if st.button("Confirm & Save WOSH Data", key="wosh_save_btn"):
+                        with db.tx(conn):
+                            repo.save_wosh_data(conn, _wosh_rows, _week_start)
+                        conn.commit()
+                        st.success(f"Saved {len(_wosh_rows)} WOSH rows for week {_week_start}.")
+                        st.rerun()
+                except Exception as _e:
+                    st.error(f"Failed to parse WOSH file: {_e}")
+
+        with pt_col:
+            st.markdown("**Period Totals Upload**")
+            pt_meta = repo.get_period_totals_meta(conn)
+            if pt_meta:
+                st.caption(f"Period on file: {pt_meta['period_start']} – {pt_meta['period_end']}")
+            else:
+                st.caption("No period totals loaded.")
+
+            pt_file = st.file_uploader("Upload Period Totals xlsx", type=["xlsx"], key="pt_uploader")
+            if pt_file:
+                try:
+                    _pt_rows, _p_start, _p_end = services.parse_period_totals_excel(pt_file)
+                    st.caption(f"Period: {_p_start} – {_p_end} — {len(_pt_rows)} employees parsed")
+                    st.dataframe(
+                        pd.DataFrame(_pt_rows).head(20),
+                        use_container_width=True, hide_index=True,
+                    )
+                    if st.button("Confirm & Save Period Totals", key="pt_save_btn"):
+                        with db.tx(conn):
+                            repo.save_period_totals(conn, _pt_rows, _p_start, _p_end)
+                        conn.commit()
+                        st.success(f"Saved {len(_pt_rows)} period totals rows.")
+                        st.rerun()
+                except Exception as _e:
+                    st.error(f"Failed to parse Period Totals file: {_e}")
 
     divider()
 
@@ -7349,6 +7867,102 @@ def manager_report_page(conn) -> None:
             "to see department-level leave breakdowns here."
         )
 
+    # ── Shift Exceptions (WOSH) ───────────────────────────────────────────────
+    _wosh_rows_all = repo.load_wosh_data(conn, manager=selected_mgr)
+    if _wosh_rows_all:
+        _wosh_df = pd.DataFrame([dict(r) for r in _wosh_rows_all])
+        divider()
+        section_header("Shift Exceptions (WOSH)")
+
+        wosh_weeks_loaded = sorted(_wosh_df["week_start_date"].dropna().unique().tolist())
+        if wosh_weeks_loaded:
+            st.caption(f"Weeks loaded: {wosh_weeks_loaded[0]} – {wosh_weeks_loaded[-1]} ({len(wosh_weeks_loaded)} week(s))")
+
+        total_exc = len(_wosh_df)
+        emps_affected = _wosh_df["employee_name"].nunique()
+        total_early = int(_wosh_df["time_early_minutes"].sum())
+        total_late  = int(_wosh_df["time_late_minutes"].sum())
+
+        we1, we2, we3, we4 = st.columns(4)
+        with we1:
+            _pto_metric("Total Exceptions", str(total_exc))
+        with we2:
+            _pto_metric("Employees Affected", str(emps_affected))
+        with we3:
+            _pto_metric("Total Early Time", f"{total_early // 60}h {total_early % 60}m")
+        with we4:
+            _pto_metric("Total Late Time", f"{total_late // 60}h {total_late % 60}m")
+
+        st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+
+        _wosh_summary = (
+            _wosh_df.groupby("employee_name")
+            .agg(
+                early_arrivals=("time_early_minutes", lambda x: (x > 0).sum()),
+                late_departures=("time_late_minutes", lambda x: (x > 0).sum()),
+                total_early_min=("time_early_minutes", "sum"),
+                total_late_min=("time_late_minutes", "sum"),
+                days_affected=("date", "nunique"),
+            )
+            .reset_index()
+        )
+        _wosh_summary["Total Extra Time"] = _wosh_summary.apply(
+            lambda r: f"{int(r['total_early_min'] + r['total_late_min']) // 60}h {int(r['total_early_min'] + r['total_late_min']) % 60}m",
+            axis=1,
+        )
+        _wosh_display = _wosh_summary.rename(columns={
+            "employee_name": "Employee",
+            "early_arrivals": "Early Arrivals",
+            "late_departures": "Late Departures",
+            "days_affected": "Days Affected",
+        })[["Employee", "Early Arrivals", "Late Departures", "Total Extra Time", "Days Affected"]]
+        st.dataframe(_wosh_display, use_container_width=True, hide_index=True)
+
+        with st.expander("View Individual Exception Details"):
+            _detail_cols = ["employee_name", "date", "exception_type", "time_early_minutes", "time_late_minutes"]
+            _avail = [c for c in _detail_cols if c in _wosh_df.columns]
+            st.dataframe(_wosh_df[_avail].rename(columns={
+                "employee_name": "Employee", "date": "Date", "exception_type": "Exception Type",
+                "time_early_minutes": "Early (min)", "time_late_minutes": "Late (min)",
+            }), use_container_width=True, hide_index=True)
+
+        st.session_state["_mgr_wosh_df"] = _wosh_df.copy()
+        st.session_state["_mgr_wosh_summary"] = _wosh_summary.copy()
+
+    # ── Hours & OT Summary ────────────────────────────────────────────────────
+    _pt_rows_team = repo.load_period_totals(conn, employees=list(team_ids))
+    if _pt_rows_team:
+        _pt_df = pd.DataFrame([dict(r) for r in _pt_rows_team])
+        pt_meta_mgr = repo.get_period_totals_meta(conn)
+        divider()
+        section_header("Hours & OT Summary")
+        if pt_meta_mgr:
+            st.caption(f"Pay period: {pt_meta_mgr['period_start']} – {pt_meta_mgr['period_end']}")
+
+        team_total_hrs = _pt_df["total_hours"].sum()
+        team_total_ot  = _pt_df["ot_hours"].sum()
+        team_vac       = _pt_df["vac_hours"].sum() + _pt_df["personal_hours"].sum()
+
+        ht1, ht2, ht3 = st.columns(3)
+        with ht1:
+            _pto_metric("Team Total Hours", f"{team_total_hrs:.1f}")
+        with ht2:
+            _pto_metric("Team Total OT", f"{team_total_ot:.1f}")
+        with ht3:
+            _pto_metric("Total Vac/Leave", f"{team_vac:.1f}")
+
+        st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+
+        _pt_display = _pt_df.rename(columns={
+            "employee_name": "Employee",
+            "reg_hours": "Reg", "ot_hours": "OT", "vac_hours": "Vac",
+            "personal_hours": "Personal", "other_hours": "Other", "total_hours": "Total",
+        })
+        _pt_show_cols = [c for c in ["Employee", "Reg", "OT", "Vac", "Personal", "Other", "Total"] if c in _pt_display.columns]
+        st.dataframe(_pt_display[_pt_show_cols], use_container_width=True, hide_index=True)
+
+        st.session_state["_mgr_pt_df"] = _pt_df.copy()
+
     # ── Download PDF ──────────────────────────────────────────────────────────
     divider()
     section_header("Download Report")
@@ -7358,6 +7972,8 @@ def manager_report_page(conn) -> None:
             pto_for_pdf = _filtered if (_filtered is not None and not _filtered.empty) else st.session_state.get("pto_df")
             if pto_for_pdf is not None and not pto_for_pdf.empty:
                 pto_for_pdf = pto_for_pdf[pto_for_pdf["employee_id"].isin(team_ids)].copy()
+            _wosh_for_pdf = st.session_state.get("_mgr_wosh_df")
+            _pt_for_pdf   = st.session_state.get("_mgr_pt_df")
             pdf_bytes = build_manager_report_pdf(
                 manager_name=selected_mgr,
                 team=team,
@@ -7366,6 +7982,8 @@ def manager_report_page(conn) -> None:
                 pts_from=pts_from,
                 pts_to=pts_to,
                 emp_type_map=emp_type_map,
+                wosh_df=_wosh_for_pdf,
+                period_totals_df=_pt_for_pdf,
             )
         safe_mgr = selected_mgr.replace(" ", "_").replace(",", "")
         st.download_button(
@@ -7375,6 +7993,32 @@ def manager_report_page(conn) -> None:
             mime="application/pdf",
             use_container_width=False,
             key=f"mgr_pdf_dl_{safe_mgr}_{today}",
+        )
+
+    # ── Executive Report ─────────────────────────────────────────────────────
+    if st.button("Generate Executive Report", key="exec_pdf_btn", use_container_width=False):
+        with st.spinner("Building Executive Report PDF…"):
+            _all_wosh  = repo.load_wosh_data(conn)
+            _all_pt    = repo.load_period_totals(conn)
+            _pt_meta   = repo.get_period_totals_meta(conn)
+            _pto_all   = st.session_state.get("pto_df")
+            exec_bytes = build_executive_report_pdf(
+                conn=conn,
+                all_managers=managers,
+                pto_df=_pto_all,
+                all_wosh=_all_wosh,
+                all_period_totals=_all_pt,
+                pt_meta=_pt_meta,
+                pts_from=pts_from,
+                pts_to=pts_to,
+            )
+        st.download_button(
+            "Download Executive Report PDF",
+            data=exec_bytes,
+            file_name=f"Executive_Report_{today}.pdf",
+            mime="application/pdf",
+            use_container_width=False,
+            key=f"exec_pdf_dl_{today}",
         )
 
 

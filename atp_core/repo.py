@@ -460,6 +460,138 @@ def clear_pto_data(conn) -> None:
     _exec(conn, "DELETE FROM pto_uploads;")
 
 
+def save_wosh_data(conn, rows: list, week_start_date: str) -> dict:
+    """Insert WOSH rows for one week, enforcing a 4-week rolling window."""
+    from datetime import date, timedelta
+    cutoff = (date.fromisoformat(week_start_date) - timedelta(weeks=4)).isoformat()
+
+    # Enforce 4-week rolling window
+    _exec(conn, "DELETE FROM wosh_uploads WHERE week_start_date < ?;", (cutoff,))
+
+    # Delete any existing rows for this exact week so re-uploads are clean
+    _exec(conn, "DELETE FROM wosh_uploads WHERE week_start_date = ?;", (week_start_date,))
+
+    from datetime import datetime as _dt
+    uploaded_at = _dt.utcnow().isoformat()
+    inserted = 0
+    for row in rows:
+        _exec(
+            conn,
+            """
+            INSERT INTO wosh_uploads (
+                employee_id, employee_name, manager, location, department, date,
+                scheduled_start, scheduled_end, actual_clock_in, actual_clock_out,
+                time_early_minutes, time_late_minutes, exception_type,
+                week_start_date, uploaded_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+            """,
+            (
+                row.get("employee_id"),
+                row.get("employee_name"),
+                row.get("manager"),
+                row.get("location"),
+                row.get("department"),
+                row.get("date"),
+                row.get("scheduled_start"),
+                row.get("scheduled_end"),
+                row.get("actual_clock_in"),
+                row.get("actual_clock_out"),
+                int(row.get("time_early_minutes") or 0),
+                int(row.get("time_late_minutes") or 0),
+                row.get("exception_type"),
+                week_start_date,
+                uploaded_at,
+            ),
+        )
+        inserted += 1
+    return {"inserted": inserted}
+
+
+def load_wosh_data(conn, manager: str | None = None) -> list:
+    if manager:
+        return _fetchall(
+            conn,
+            "SELECT * FROM wosh_uploads WHERE manager = ? ORDER BY date, employee_name;",
+            (manager,),
+        )
+    return _fetchall(
+        conn,
+        "SELECT * FROM wosh_uploads ORDER BY date, employee_name;",
+    )
+
+
+def get_wosh_weeks(conn) -> list[str]:
+    rows = _fetchall(
+        conn,
+        "SELECT DISTINCT week_start_date FROM wosh_uploads ORDER BY week_start_date;",
+    )
+    return [r["week_start_date"] for r in rows]
+
+
+def clear_wosh_data(conn) -> None:
+    _exec(conn, "DELETE FROM wosh_uploads;")
+
+
+def save_period_totals(conn, rows: list, period_start: str, period_end: str) -> dict:
+    """Replace all period totals with the new upload (one period at a time)."""
+    _exec(conn, "DELETE FROM period_totals_uploads;")
+    from datetime import datetime as _dt
+    uploaded_at = _dt.utcnow().isoformat()
+    inserted = 0
+    for row in rows:
+        _exec(
+            conn,
+            """
+            INSERT INTO period_totals_uploads (
+                employee_id, employee_name,
+                reg_hours, ot_hours, vac_hours, personal_hours, other_hours, total_hours,
+                period_start, period_end, uploaded_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?);
+            """,
+            (
+                row.get("employee_id"),
+                row.get("employee_name"),
+                float(row.get("reg_hours") or 0),
+                float(row.get("ot_hours") or 0),
+                float(row.get("vac_hours") or 0),
+                float(row.get("personal_hours") or 0),
+                float(row.get("other_hours") or 0),
+                float(row.get("total_hours") or 0),
+                period_start,
+                period_end,
+                uploaded_at,
+            ),
+        )
+        inserted += 1
+    return {"inserted": inserted}
+
+
+def load_period_totals(conn, manager: str | None = None, employees: list | None = None) -> list:
+    """Return period totals, optionally filtered to a set of employee_ids."""
+    if employees:
+        ph = ",".join(["?"] * len(employees))
+        return _fetchall(
+            conn,
+            f"SELECT * FROM period_totals_uploads WHERE employee_id IN ({ph}) ORDER BY employee_name;",
+            tuple(int(e) for e in employees),
+        )
+    return _fetchall(
+        conn,
+        "SELECT * FROM period_totals_uploads ORDER BY employee_name;",
+    )
+
+
+def get_period_totals_meta(conn) -> dict | None:
+    row = _fetchone(conn, "SELECT period_start, period_end FROM period_totals_uploads LIMIT 1;")
+    if row:
+        return {"period_start": row["period_start"], "period_end": row["period_end"]}
+    return None
+
+
+def clear_period_totals(conn) -> None:
+    _exec(conn, "DELETE FROM period_totals_uploads;")
+
+
 def report_full_year_perfect_attendance(conn, year: int):
     start = date(year, 1, 1).isoformat()
     end = date(year + 1, 1, 1).isoformat()
