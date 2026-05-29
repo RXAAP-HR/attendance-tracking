@@ -3356,7 +3356,7 @@ def _pto_metric(label: str, value: str, sub: str = "") -> None:
     )
     st.markdown(
         f"<div style='background:#0d1b2e;border:1px solid #1a3a5c;border-radius:10px;"
-        f"padding:1rem 1.25rem;text-align:center;min-height:6.5rem;display:flex;flex-direction:column;justify-content:center'>"
+        f"padding:1rem 1.25rem;text-align:center;height:7.5rem;display:flex;flex-direction:column;justify-content:center'>"
         f"<div style='font-size:.78rem;color:#4a7fa5;text-transform:uppercase;letter-spacing:.08em'>{_html_inline(label)}</div>"
         f"<div style='font-size:1.8rem;font-weight:700;color:#e8f4fd;line-height:1.2;margin-top:.3rem'>{_html_inline(value)}</div>"
         f"{sub_html}</div>",
